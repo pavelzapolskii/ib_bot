@@ -1,0 +1,22 @@
+# Interactive Brokers API
+# ibapi is included locally in the project (v10.25.1)
+ib_insync>=0.9.86
+
+# Telegram Bot
+pyTelegramBotAPI>=4.14.0
+
+# Database
+clickhouse-driver>=0.2.6
+
+# Data Processing
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Scientific Computing (Black-Scholes, optimization)
+scipy>=1.10.0
+
+# Charting
+matplotlib>=3.7.0
+
+# Environment variables (recommended for credentials)
+python-dotenv>=1.0.0

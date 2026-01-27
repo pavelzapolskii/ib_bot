@@ -1,0 +1,42 @@
+# Environment variables (contains secrets)
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Generated files
+vol.png
+
+# IB API archive
+*.zip
+
+# IB API source (not needed in repo)
+IBJts/
+META-INF/
+ibapi/
+
+# Unused files (kept locally but not committed)
+bear_spread_strategy.py
+volatility_scanner.py
+option_chain_params.py
+iv_smile_analysis.py
+bot_simple.py
+market_data_fetcher.py
+scanner.ipynb
+her.ipynb
+scanner_params.xml
+
+# Jupyter checkpoints
+.ipynb_checkpoints/

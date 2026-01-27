@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+  # IB Gateway with virtual display (for headless server)
+  ib-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    restart: unless-stopped
+    environment:
+      TWS_USERID: ${IB_USERNAME}
+      TWS_PASSWORD: ${IB_PASSWORD}
+      TRADING_MODE: ${IB_TRADING_MODE:-paper}  # paper or live
+      TWS_ACCEPT_INCOMING: "yes"
+      READ_ONLY_API: "no"
+      VNC_SERVER_PASSWORD: ${VNC_PASSWORD:-password}
+    ports:
+      - "4001:4001"   # IB Gateway API (live)
+      - "4002:4002"   # IB Gateway API (paper)
+      - "5900:5900"   # VNC for manual login/2FA
+    volumes:
+      - ib-gateway-data:/root/Jts
+    networks:
+      - ib-network
+
+  # ClickHouse Database
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ports:
+      - "8123:8123"   # HTTP interface
+      - "9000:9000"   # Native protocol
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - ./sql/init:/docker-entrypoint-initdb.d
+    networks:
+      - ib-network
+
+  # IB Options Bot
+  ib-bot:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - ib-gateway
+      - clickhouse
+    environment:
+      # Telegram
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      # IB Gateway (connect to container)
+      IB_HOST: ib-gateway
+      IB_PORT: 4002  # Paper trading port
+      IB_CLIENT_ID: ${IB_CLIENT_ID:-22}
+      # ClickHouse (connect to container)
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: 9000
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+    volumes:
+      - ./vol.png:/app/vol.png
+    networks:
+      - ib-network
+
+volumes:
+  ib-gateway-data:
+  clickhouse-data:
+
+networks:
+  ib-network:
+    driver: bridge
