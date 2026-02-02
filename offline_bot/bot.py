@@ -96,7 +96,7 @@ chat_id = TELEGRAM_CHAT_ID
 
 # ETF options: GLD (Gold), SLV (Silver), SPY (S&P 500)
 symbols = [
-    # 'GLD',
+    'GLD',
     'SLV',
     # 'SPY',
 ]
@@ -686,11 +686,12 @@ _Only alerts when spread < 5%_
 
     @bot.message_handler(commands=['calc'])
     def send_calc_menu(message):
-        """Show calculation options menu"""
+        """Show asset selection for calculations"""
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("📉 Best Put to Sell Vol", callback_data='CALC_SELLPUT'))
-        markup.add(types.InlineKeyboardButton("📈 Best Call Insurance", callback_data='CALC_BUYCALL'))
-        bot.send_message(message.chat.id, "Select calculation:", reply_markup=markup)
+        markup.add(types.InlineKeyboardButton("🥇 GLD (Gold)", callback_data='CALC_ASSET_GLD'))
+        markup.add(types.InlineKeyboardButton("🥈 SLV (Silver)", callback_data='CALC_ASSET_SLV'))
+        markup.add(types.InlineKeyboardButton("📊 All Assets", callback_data='CALC_ASSET_ALL'))
+        bot.send_message(message.chat.id, "Select asset for calculation:", reply_markup=markup)
 
     @bot.message_handler(commands=['atm'])
     def send_atm_strikes(message):
@@ -738,22 +739,39 @@ _Only alerts when spread < 5%_
         bot.answer_callback_query(call.id)
         argument = call.data
 
-        # Handle CALC options
-        if argument.startswith('CALC_'):
-            calc_type = argument.split('_')[1]
+        # Handle CALC asset selection
+        if argument.startswith('CALC_ASSET_'):
+            asset = argument.split('_')[2]  # GLD, SLV, or ALL
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("📉 Best Put to Sell Vol", callback_data=f'CALCTYPE_{asset}_SELLPUT'))
+            markup.add(types.InlineKeyboardButton("📈 Best Call Insurance", callback_data=f'CALCTYPE_{asset}_BUYCALL'))
+            asset_name = "All Assets" if asset == "ALL" else asset
+            bot.send_message(call.message.chat.id, f"Select calculation for *{asset_name}*:", reply_markup=markup, parse_mode='Markdown')
+            return
+
+        # Handle CALC type selection
+        if argument.startswith('CALCTYPE_'):
+            parts = argument.split('_')
+            asset_filter = parts[1]  # GLD, SLV, or ALL
+            calc_type = parts[2]  # SELLPUT or BUYCALL
 
             if calc_type == 'SELLPUT':
-                # Best Put to Sell Vol: highest IV/spread for OTM puts
-                msg = "📉 *Best Puts to Sell Vol*\n"
-                msg += "_Metric: IV / Spread (higher = better)_\n"
-                msg += "_Filter: OTM puts only (strike < underlying)_\n\n"
+                # Best Put to Sell Vol: highest IV/spread for OTM puts, further from forward = better
+                asset_label = "All Assets" if asset_filter == "ALL" else asset_filter
+                msg = f"📉 *Best Puts to Sell Vol ({asset_label})*\n"
+                msg += "_Metric: (IV / Spread) × (1 + OTM%)_\n"
+                msg += "_Filter: OTM puts, further from forward = better_\n\n"
 
                 results = []
                 for name, vols in app.volatilities.items():
-                    parts = name.split('_')
-                    symbol = parts[0]
-                    option_type = parts[1]
-                    expiration = parts[2]
+                    name_parts = name.split('_')
+                    symbol = name_parts[0]
+                    option_type = name_parts[1]
+                    expiration = name_parts[2]
+
+                    # Filter by asset if not ALL
+                    if asset_filter != 'ALL' and symbol != asset_filter:
+                        continue
 
                     # Only process puts
                     if option_type != 'P':
@@ -762,6 +780,13 @@ _Only alerts when spread < 5%_
                     dte = calculate_days_to_expiry(expiration)
                     exp_date = datetime.datetime.strptime(str(expiration), '%Y%m%d')
                     exp_str = exp_date.strftime('%b %d')
+
+                    # Calculate forward price for this expiration
+                    first_strike_data = next((d for d in vols.values() if d.get('underlying_price')), None)
+                    if not first_strike_data:
+                        continue
+                    spot = first_strike_data.get('underlying_price')
+                    forward = calculate_forward_price(spot, dte)
 
                     for strike, data in vols.items():
                         bid_vol = data.get('bid_vol')
@@ -773,8 +798,8 @@ _Only alerts when spread < 5%_
                         if bid_vol is None or ask_vol is None or und_price is None:
                             continue
 
-                        # OTM put = strike < underlying price
-                        if strike >= und_price:
+                        # OTM put = strike < forward price
+                        if strike >= forward:
                             continue
 
                         spread = ask_vol - bid_vol
@@ -785,9 +810,14 @@ _Only alerts when spread < 5%_
                         if spread_pct > 0.10:
                             continue
 
-                        # Metric: IV / spread (higher is better for selling vol)
+                        # Distance from forward (OTM percentage)
+                        otm_pct = (forward - strike) / forward * 100
+
+                        # Metric: (IV / spread) × (1 + OTM%/100)
+                        # Further OTM = higher bonus
                         if spread > 0:
-                            metric = mid_vol / spread
+                            base_metric = mid_vol / spread
+                            metric = base_metric * (1 + otm_pct / 100)
                         else:
                             metric = 0
 
@@ -810,6 +840,8 @@ _Only alerts when spread < 5%_
                             'spread_pct': spread_pct,
                             'metric': metric,
                             'und_price': und_price,
+                            'forward': forward,
+                            'otm_pct': otm_pct,
                             'bid_price': bid_price,
                             'ask_price': ask_price,
                             'tv_ann_bid': tv_ann_bid,
@@ -821,14 +853,13 @@ _Only alerts when spread < 5%_
 
                 # Show top 5
                 for i, r in enumerate(results[:5]):
-                    otm_pct = (r['und_price'] - r['strike']) / r['und_price'] * 100
                     msg += f"*{i+1}. {r['symbol']} {r['strike']}P {r['expiration']}*\n"
                     msg += f"   IV: {r['mid_vol']*100:.1f}% | Spread: {r['spread']*100:.1f}% ({r['spread_pct']*100:.0f}%)\n"
                     if r['bid_price'] and r['ask_price']:
                         msg += f"   Price: ${r['bid_price']:.2f} / ${r['ask_price']:.2f}\n"
                     if r['tv_ann_bid'] is not None and r['tv_ann_ask'] is not None:
                         msg += f"   TV(ann): {r['tv_ann_bid']:.1f}% / {r['tv_ann_ask']:.1f}%\n"
-                    msg += f"   OTM: {otm_pct:.1f}% | DTE: {r['dte']} | Score: {r['metric']:.1f}\n\n"
+                    msg += f"   OTM: {r['otm_pct']:.1f}% (Fwd=${r['forward']:.2f}) | DTE: {r['dte']} | Score: {r['metric']:.1f}\n\n"
 
                 if not results:
                     msg += "_No valid OTM puts with tight spreads found_"
@@ -837,17 +868,22 @@ _Only alerts when spread < 5%_
                 return
 
             elif calc_type == 'BUYCALL':
-                # Best Call Insurance: lowest IV/spread for ITM calls
-                msg = "📈 *Best Calls for Insurance*\n"
-                msg += "_Metric: IV × Spread (lower = better)_\n"
-                msg += "_Filter: ITM calls only (strike < underlying)_\n\n"
+                # Best Call Insurance: lowest IV/spread for ITM calls, further from forward = better
+                asset_label = "All Assets" if asset_filter == "ALL" else asset_filter
+                msg = f"📈 *Best Calls for Insurance ({asset_label})*\n"
+                msg += "_Metric: (IV × Spread) / (1 + ITM%)_\n"
+                msg += "_Filter: ITM calls, further from forward = better_\n\n"
 
                 results = []
                 for name, vols in app.volatilities.items():
-                    parts = name.split('_')
-                    symbol = parts[0]
-                    option_type = parts[1]
-                    expiration = parts[2]
+                    name_parts = name.split('_')
+                    symbol = name_parts[0]
+                    option_type = name_parts[1]
+                    expiration = name_parts[2]
+
+                    # Filter by asset if not ALL
+                    if asset_filter != 'ALL' and symbol != asset_filter:
+                        continue
 
                     # Only process calls
                     if option_type != 'C':
@@ -856,6 +892,13 @@ _Only alerts when spread < 5%_
                     dte = calculate_days_to_expiry(expiration)
                     exp_date = datetime.datetime.strptime(str(expiration), '%Y%m%d')
                     exp_str = exp_date.strftime('%b %d')
+
+                    # Calculate forward price for this expiration
+                    first_strike_data = next((d for d in vols.values() if d.get('underlying_price')), None)
+                    if not first_strike_data:
+                        continue
+                    spot = first_strike_data.get('underlying_price')
+                    forward = calculate_forward_price(spot, dte)
 
                     for strike, data in vols.items():
                         bid_vol = data.get('bid_vol')
@@ -867,8 +910,8 @@ _Only alerts when spread < 5%_
                         if bid_vol is None or ask_vol is None or und_price is None:
                             continue
 
-                        # ITM call = strike < underlying price
-                        if strike >= und_price:
+                        # ITM call = strike < forward price
+                        if strike >= forward:
                             continue
 
                         spread = ask_vol - bid_vol
@@ -879,8 +922,13 @@ _Only alerts when spread < 5%_
                         if spread_pct > 0.10:
                             continue
 
-                        # Metric: IV * spread (lower is better for buying insurance)
-                        metric = mid_vol * spread
+                        # Distance from forward (ITM percentage)
+                        itm_pct = (forward - strike) / forward * 100
+
+                        # Metric: (IV × spread) / (1 + ITM%/100)
+                        # Further ITM = lower metric (better for insurance, more intrinsic value)
+                        base_metric = mid_vol * spread
+                        metric = base_metric / (1 + itm_pct / 100)
 
                         # Calculate time value annualized
                         tv_ann_bid = None
@@ -901,6 +949,8 @@ _Only alerts when spread < 5%_
                             'spread_pct': spread_pct,
                             'metric': metric,
                             'und_price': und_price,
+                            'forward': forward,
+                            'itm_pct': itm_pct,
                             'bid_price': bid_price,
                             'ask_price': ask_price,
                             'tv_ann_bid': tv_ann_bid,
@@ -912,14 +962,13 @@ _Only alerts when spread < 5%_
 
                 # Show top 5
                 for i, r in enumerate(results[:5]):
-                    itm_pct = (r['und_price'] - r['strike']) / r['und_price'] * 100
                     msg += f"*{i+1}. {r['symbol']} {r['strike']}C {r['expiration']}*\n"
                     msg += f"   IV: {r['mid_vol']*100:.1f}% | Spread: {r['spread']*100:.1f}% ({r['spread_pct']*100:.0f}%)\n"
                     if r['bid_price'] and r['ask_price']:
                         msg += f"   Price: ${r['bid_price']:.2f} / ${r['ask_price']:.2f}\n"
                     if r['tv_ann_bid'] is not None and r['tv_ann_ask'] is not None:
                         msg += f"   TV(ann): {r['tv_ann_bid']:.1f}% / {r['tv_ann_ask']:.1f}%\n"
-                    msg += f"   ITM: {itm_pct:.1f}% | DTE: {r['dte']} | Score: {r['metric']*10000:.2f}\n\n"
+                    msg += f"   ITM: {r['itm_pct']:.1f}% (Fwd=${r['forward']:.2f}) | DTE: {r['dte']} | Score: {r['metric']*10000:.2f}\n\n"
 
                 if not results:
                     msg += "_No valid ITM calls with tight spreads found_"
