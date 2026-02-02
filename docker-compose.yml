@@ -21,30 +21,12 @@ services:
     networks:
       - ib-network
 
-  # ClickHouse Database
-  clickhouse:
-    image: clickhouse/clickhouse-server:latest
-    restart: unless-stopped
-    environment:
-      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
-      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
-      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
-    ports:
-      - "8123:8123"   # HTTP interface
-      - "9000:9000"   # Native protocol
-    volumes:
-      - clickhouse-data:/var/lib/clickhouse
-      - ./sql/init:/docker-entrypoint-initdb.d
-    networks:
-      - ib-network
-
-  # IB Options Bot
+  # IB Options Bot (Telegram alerts only, no database)
   ib-bot:
     build: .
     restart: unless-stopped
     depends_on:
       - ib-gateway
-      - clickhouse
     environment:
       # Telegram
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
@@ -53,19 +35,11 @@ services:
       IB_HOST: ib-gateway
       IB_PORT: 4002  # Paper trading port
       IB_CLIENT_ID: ${IB_CLIENT_ID:-22}
-      # ClickHouse (connect to container)
-      CLICKHOUSE_HOST: clickhouse
-      CLICKHOUSE_PORT: 9000
-      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
-      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
-    volumes:
-      - ./vol.png:/app/vol.png
     networks:
       - ib-network
 
 volumes:
   ib-gateway-data:
-  clickhouse-data:
 
 networks:
   ib-network:

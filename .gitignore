@@ -38,5 +38,10 @@ scanner.ipynb
 her.ipynb
 scanner_params.xml
 
+# Offline version with ClickHouse (backup)
+bot_with_clickhouse.py
+connection.py
+sql/
+
 # Jupyter checkpoints
 .ipynb_checkpoints/
