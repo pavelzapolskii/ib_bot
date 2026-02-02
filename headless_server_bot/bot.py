@@ -348,6 +348,47 @@ def calculate_time_value_annualized(option_price, intrinsic_value, underlying_pr
     return annualized
 
 
+def generate_iv_smile_plot(app, symbol_key, filename='iv_smile.png'):
+    """
+    Generate IV smile plot (bid/ask) for a given symbol key.
+    Returns True if successful, False otherwise.
+    """
+    if symbol_key not in app.volatilities:
+        return False
+
+    data = app.volatilities[symbol_key]
+    strks = list(sorted(data.keys()))
+    bidvol = np.array([data[s]['bid_vol'] for s in strks])
+    askvol = np.array([data[s]['ask_vol'] for s in strks])
+
+    # Filter out None values for y-limits
+    valid_bids = [v for v in bidvol if v is not None]
+    valid_asks = [v for v in askvol if v is not None]
+
+    all_valid = valid_bids + valid_asks
+    if not all_valid:
+        return False
+
+    min_value = round_down_to_closest_10(min(all_valid))
+    max_value = round_up_to_closest_10(max(all_valid))
+
+    plt.switch_backend('Agg')
+    plt.figure(figsize=(10, 6))
+    plt.cla()
+    plt.scatter(strks, bidvol, label='Bid IV', marker='o')
+    plt.scatter(strks, askvol, label='Ask IV', marker='x')
+    plt.grid(True)
+    plt.legend()
+    plt.xlabel('Strike')
+    plt.ylabel('Implied Volatility')
+    plt.ylim([min_value, max_value])
+    plt.title(f'IV Smile: {symbol_key}')
+    plt.savefig(filename, dpi=100, bbox_inches='tight')
+    plt.close()
+
+    return True
+
+
 class IBApp(EWrapper, EClient):
     def __init__(self, contracts_list, strike_ranges_dict):
         EClient.__init__(self, self)
@@ -626,6 +667,8 @@ _Only alerts when spread < 5%_
                         bid_vol = data.get('bid_vol')
                         ask_vol = data.get('ask_vol')
                         und_price = data.get('underlying_price')
+                        bid_price = data.get('bid_price')
+                        ask_price = data.get('ask_price')
 
                         if bid_vol is None or ask_vol is None or und_price is None:
                             continue
@@ -648,16 +691,29 @@ _Only alerts when spread < 5%_
                         else:
                             metric = 0
 
+                        # Calculate time value annualized
+                        tv_ann_bid = None
+                        tv_ann_ask = None
+                        if bid_price and ask_price and dte > 0:
+                            intrinsic = calculate_intrinsic_value(strike, und_price, 'P')
+                            tv_ann_bid = calculate_time_value_annualized(bid_price, intrinsic, und_price, dte)
+                            tv_ann_ask = calculate_time_value_annualized(ask_price, intrinsic, und_price, dte)
+
                         results.append({
                             'symbol': symbol,
                             'strike': strike,
                             'expiration': exp_str,
+                            'expiration_raw': expiration,
                             'dte': dte,
                             'mid_vol': mid_vol,
                             'spread': spread,
                             'spread_pct': spread_pct,
                             'metric': metric,
-                            'und_price': und_price
+                            'und_price': und_price,
+                            'bid_price': bid_price,
+                            'ask_price': ask_price,
+                            'tv_ann_bid': tv_ann_bid,
+                            'tv_ann_ask': tv_ann_ask
                         })
 
                 # Sort by metric (highest first)
@@ -668,6 +724,10 @@ _Only alerts when spread < 5%_
                     otm_pct = (r['und_price'] - r['strike']) / r['und_price'] * 100
                     msg += f"*{i+1}. {r['symbol']} {r['strike']}P {r['expiration']}*\n"
                     msg += f"   IV: {r['mid_vol']*100:.1f}% | Spread: {r['spread']*100:.1f}% ({r['spread_pct']*100:.0f}%)\n"
+                    if r['bid_price'] and r['ask_price']:
+                        msg += f"   Price: ${r['bid_price']:.2f} / ${r['ask_price']:.2f}\n"
+                    if r['tv_ann_bid'] is not None and r['tv_ann_ask'] is not None:
+                        msg += f"   TV(ann): {r['tv_ann_bid']:.1f}% / {r['tv_ann_ask']:.1f}%\n"
                     msg += f"   OTM: {otm_pct:.1f}% | DTE: {r['dte']} | Score: {r['metric']:.1f}\n\n"
 
                 if not results:
@@ -701,6 +761,8 @@ _Only alerts when spread < 5%_
                         bid_vol = data.get('bid_vol')
                         ask_vol = data.get('ask_vol')
                         und_price = data.get('underlying_price')
+                        bid_price = data.get('bid_price')
+                        ask_price = data.get('ask_price')
 
                         if bid_vol is None or ask_vol is None or und_price is None:
                             continue
@@ -720,16 +782,29 @@ _Only alerts when spread < 5%_
                         # Metric: IV * spread (lower is better for buying insurance)
                         metric = mid_vol * spread
 
+                        # Calculate time value annualized
+                        tv_ann_bid = None
+                        tv_ann_ask = None
+                        if bid_price and ask_price and dte > 0:
+                            intrinsic = calculate_intrinsic_value(strike, und_price, 'C')
+                            tv_ann_bid = calculate_time_value_annualized(bid_price, intrinsic, und_price, dte)
+                            tv_ann_ask = calculate_time_value_annualized(ask_price, intrinsic, und_price, dte)
+
                         results.append({
                             'symbol': symbol,
                             'strike': strike,
                             'expiration': exp_str,
+                            'expiration_raw': expiration,
                             'dte': dte,
                             'mid_vol': mid_vol,
                             'spread': spread,
                             'spread_pct': spread_pct,
                             'metric': metric,
-                            'und_price': und_price
+                            'und_price': und_price,
+                            'bid_price': bid_price,
+                            'ask_price': ask_price,
+                            'tv_ann_bid': tv_ann_bid,
+                            'tv_ann_ask': tv_ann_ask
                         })
 
                 # Sort by metric (lowest first)
@@ -740,6 +815,10 @@ _Only alerts when spread < 5%_
                     itm_pct = (r['und_price'] - r['strike']) / r['und_price'] * 100
                     msg += f"*{i+1}. {r['symbol']} {r['strike']}C {r['expiration']}*\n"
                     msg += f"   IV: {r['mid_vol']*100:.1f}% | Spread: {r['spread']*100:.1f}% ({r['spread_pct']*100:.0f}%)\n"
+                    if r['bid_price'] and r['ask_price']:
+                        msg += f"   Price: ${r['bid_price']:.2f} / ${r['ask_price']:.2f}\n"
+                    if r['tv_ann_bid'] is not None and r['tv_ann_ask'] is not None:
+                        msg += f"   TV(ann): {r['tv_ann_bid']:.1f}% / {r['tv_ann_ask']:.1f}%\n"
                     msg += f"   ITM: {itm_pct:.1f}% | DTE: {r['dte']} | Score: {r['metric']*10000:.2f}\n\n"
 
                 if not results:
@@ -932,4 +1011,9 @@ _Only alerts when spread < 5%_
 
                     bot.send_photo(chat_id, open('vol.png', 'rb'))
                     bot.send_message(chat_id, msg, parse_mode='Markdown')
+
+                    # Send full IV smile plot after anomaly message
+                    if generate_iv_smile_plot(app, name, 'iv_smile.png'):
+                        bot.send_photo(chat_id, open('iv_smile.png', 'rb'), caption=f"IV Smile: {name}")
+
                     last_anom[name] = datetime.datetime.now()
