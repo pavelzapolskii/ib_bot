@@ -514,8 +514,27 @@ class IBApp(EWrapper, EClient):
             print(f"Contract error {reqId}: {errorString}")
         elif errorCode == 10091:
             print(f"Subscription needed {reqId}: {errorString}")
+        elif errorCode in [1100, 1101, 1102, 2110]:
+            # Connection-related errors
+            # 1100: Connectivity lost
+            # 1101: Connectivity restored (receiving historical data)
+            # 1102: Connectivity restored (all data)
+            # 2110: Connectivity between IB and TWS lost
+            print(f"Connection issue {errorCode}: {errorString}")
+            try:
+                bot.send_message(chat_id, f"⚠️ *IB Connection Issue*\nCode: {errorCode}\n{errorString}", parse_mode='Markdown')
+            except:
+                pass
         else:
             print(f"Error {reqId} {errorCode}: {errorString}")
+
+    def connectionClosed(self):
+        """Called when connection to TWS/Gateway is closed"""
+        print("Connection closed!")
+        try:
+            bot.send_message(chat_id, "🔴 *Bot Disconnected*\nIB connection has been closed.", parse_mode='Markdown')
+        except:
+            pass
 
     def historicalData(self, reqId, bar):
         bot.send_message(chat_id, str(bar))
@@ -565,8 +584,9 @@ if __name__ == '__main__':
     print("IB Options Monitor Bot - GLD/SLV/SPY ETF Options")
     print("=" * 50)
 
-    # Step 1: Fetch current prices for ETFs
-    prices = fetch_current_prices(IB_HOST, IB_PORT, IB_CLIENT_ID)
+    try:
+        # Step 1: Fetch current prices for ETFs
+        prices = fetch_current_prices(IB_HOST, IB_PORT, IB_CLIENT_ID)
 
     # Step 2: Build strike ranges based on forward prices
     build_strike_ranges(prices)
@@ -1211,3 +1231,14 @@ _Only alerts when spread < 5%_
                         bot.send_photo(chat_id, open('iv_smile.png', 'rb'), caption=f"IV Smile: {name}")
 
                     last_anom[name] = datetime.datetime.now()
+
+    except KeyboardInterrupt:
+        print("\nShutting down...")
+        bot.send_message(chat_id, "🛑 *Bot Stopped*\nManual shutdown (Ctrl+C)", parse_mode='Markdown')
+    except Exception as e:
+        print(f"Fatal error: {e}")
+        try:
+            bot.send_message(chat_id, f"🔴 *Bot Crashed*\nError: {str(e)}", parse_mode='Markdown')
+        except:
+            pass
+        raise
