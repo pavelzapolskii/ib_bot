@@ -3,6 +3,7 @@ import telebot
 from telebot import types
 from dotenv import load_dotenv
 
+import re
 import time
 from ibapi.client import EClient
 from ibapi.wrapper import EWrapper
@@ -24,6 +25,8 @@ IB_HOST = os.getenv('IB_HOST', '127.0.0.1')
 IB_PORT = int(os.getenv('IB_PORT', 7497))
 IB_CLIENT_ID = int(os.getenv('IB_CLIENT_ID', 22))
 
+user_command_messages = {}
+
 
 def round_down_to_closest_10(n):
     return math.floor(n * 10.0) / 10
@@ -31,38 +34,173 @@ def round_down_to_closest_10(n):
 def round_up_to_closest_10(n):
     return math.ceil(n * 10.0) / 10
 
+def calculate_days_to_expiry(exp_str):
+    """Calculate days to expiry from YYYYMMDD string"""
+    exp_date = datetime.datetime.strptime(str(exp_str), '%Y%m%d')
+    today = datetime.datetime.now()
+    return (exp_date - today).days
+
+def calculate_forward_price(spot, days_to_expiry, rate=0.045):
+    """Calculate forward price: F = S * e^(r*T)"""
+    T = days_to_expiry / 365.0
+    return spot * math.exp(rate * T)
+
+def get_atm_strikes_option2(current_prices):
+    """
+    Option 2: Calculate ATM strikes using forward price
+    Returns dict: {(symbol, expiration): {'spot': x, 'forward': y, 'atm_strike': z, 'days': d}}
+    """
+    atm_data = {}
+    rate = 0.045  # ~4.5% risk-free rate
+
+    for symbol in symbols:
+        spot = current_prices.get(symbol)
+        if not spot:
+            continue
+
+        for exp in expiration_dates[symbol]:
+            days = calculate_days_to_expiry(exp)
+            forward = calculate_forward_price(spot, days, rate)
+            atm_strike = round(forward)  # Round to nearest integer strike
+
+            atm_data[(symbol, exp)] = {
+                'spot': spot,
+                'forward': forward,
+                'atm_strike': atm_strike,
+                'days': days
+            }
+
+    return atm_data
+
 # Telegram bot
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 chat_id = TELEGRAM_CHAT_ID
 
-# SPY only
-symbols = ['SPY']
+# ETF options: GLD (Gold), SLV (Silver), SPY (S&P 500)
+symbols = [
+    # 'GLD',
+    'SLV',
+    # 'SPY',
+]
 
-# Strike ranges - SPY 600 to 800
-strike_ranges = {
-    'SPY': np.arange(600, 805, 5),  # 600, 605, 610, ... 800 (41 strikes)
+# Strike range offsets (will be applied to current price)
+strike_offsets = {
+    'GLD': 100,  # ±100 from current price
+    'SLV': 25,   # ±25 from current price
+    'SPY': 50,   # ±50 from current price
 }
 
 # Expiration dates - 3 tenors
 expiration_dates = {
-    'SPY': ['20260220', '20260417', '20260515'],  # Feb 20, Apr 17, May 15
+    'GLD': ['20260220', '20260320', '20260417'],  # Feb 20, Mar 20, Apr 17 2026
+    'SLV': ['20260220', '20260320', '20260417'],  # Feb 20, Mar 20, Apr 17 2026
+    'SPY': ['20260220', '20260320', '20260417'],  # Feb 20, Mar 20, Apr 17 2026
 }
 
-# Build contracts list
+# These will be populated dynamically after fetching current prices
+strike_ranges = {}
 contracts = []
-for symbol in symbols:
-    for expiration_date in expiration_dates[symbol]:
-        for strike in strike_ranges[symbol]:
-            for right in ['C', 'P']:  # Call and Put
-                contract = Contract()
-                contract.symbol = symbol
-                contract.secType = "OPT"
-                contract.exchange = "SMART"
-                contract.currency = "USD"
-                contract.lastTradeDateOrContractMonth = expiration_date
-                contract.strike = strike
-                contract.right = right
-                contracts.append(contract)
+
+
+class PriceFetcher(EWrapper, EClient):
+    """Helper class to fetch current stock prices before building option contracts"""
+    def __init__(self):
+        EClient.__init__(self, self)
+        self.prices = {}
+        self.price_event = threading.Event()
+        self.reqId_to_symbol = {}  # Map reqId -> symbol
+
+    def error(self, reqId, errorCode, errorString, advancedOrderRejectJson=""):
+        if errorCode not in [2104, 2106, 2158]:
+            print(f"PriceFetcher Error {reqId} {errorCode}: {errorString}")
+
+    def tickPrice(self, reqId, tickType, price, attrib):
+        # tickType 4 = LAST price
+        if tickType == 4 and price > 0:
+            symbol = self.reqId_to_symbol.get(reqId)
+            if symbol:
+                self.prices[symbol] = price
+                print(f"Got price for {symbol}: ${price:.2f}")
+                if len(self.prices) == len(self.reqId_to_symbol):
+                    self.price_event.set()
+
+    def nextValidId(self, orderId):
+        pass
+
+
+def fetch_current_prices(host, port, client_id):
+    """Fetch current prices for ETFs"""
+    print("Fetching current ETF prices...")
+
+    fetcher = PriceFetcher()
+    fetcher.connect(host, port, clientId=client_id)
+
+    api_thread = threading.Thread(target=fetcher.run, daemon=True)
+    api_thread.start()
+    time.sleep(2)  # Wait for connection
+
+    # Request market data for each symbol
+    for i, symbol in enumerate(symbols):
+        fetcher.reqId_to_symbol[i] = symbol  # Map reqId to symbol
+        contract = Contract()
+        contract.symbol = symbol
+        contract.secType = "STK"
+        contract.exchange = "SMART"
+        contract.currency = "USD"
+        fetcher.reqMktData(i, contract, "", False, False, [])
+
+    # Wait for prices (max 10 seconds)
+    fetcher.price_event.wait(timeout=10)
+    fetcher.disconnect()
+    time.sleep(1)
+
+    return fetcher.prices
+
+
+def build_strike_ranges(prices):
+    """Build strike ranges based on FORWARD prices (longest tenor)"""
+    global strike_ranges
+
+    for symbol in symbols:
+        if symbol in prices:
+            spot_price = prices[symbol]
+            offset = strike_offsets[symbol]
+
+            # Use longest tenor (Apr 17) for forward calculation
+            longest_exp = expiration_dates[symbol][-1]  # Last expiration
+            days_to_exp = calculate_days_to_expiry(longest_exp)
+            forward_price = calculate_forward_price(spot_price, days_to_exp)
+
+            # Round forward to integer for strike center
+            mid = int(round(forward_price))
+
+            # Build range: forward mid ± offset
+            strike_ranges[symbol] = np.arange(mid - offset, mid + offset + 1, 1)
+            print(f"{symbol}: spot=${spot_price:.2f}, fwd=${forward_price:.2f} ({days_to_exp}d), range={mid-offset}-{mid+offset} ({len(strike_ranges[symbol])} strikes)")
+        else:
+            # Fallback if price fetch failed - should not happen
+            print(f"ERROR: Could not get price for {symbol}!")
+            raise Exception(f"Failed to fetch price for {symbol}. Check TWS connection.")
+
+
+def build_contracts():
+    """Build option contracts list after strike ranges are set"""
+    global contracts
+    contracts = []
+
+    for symbol in symbols:
+        for expiration_date in expiration_dates[symbol]:
+            for strike in strike_ranges[symbol]:
+                for right in ['C', 'P']:
+                    contract = Contract()
+                    contract.symbol = symbol
+                    contract.secType = "OPT"
+                    contract.exchange = "SMART"
+                    contract.currency = "USD"
+                    contract.lastTradeDateOrContractMonth = expiration_date
+                    contract.strike = float(strike)
+                    contract.right = right
+                    contracts.append(contract)
 
 def seconds_to_now(d):
     return (datetime.datetime.now() - d).total_seconds()
@@ -79,10 +217,10 @@ def is_smile(x):
 
 
 class IBApp(EWrapper, EClient):
-    def __init__(self):
+    def __init__(self, contracts_list, strike_ranges_dict):
         EClient.__init__(self, self)
-        self.contracts = contracts
-        self.strike_ranges = strike_ranges
+        self.contracts = contracts_list
+        self.strike_ranges = strike_ranges_dict
         self.contract_details = {}
         self.connected_event = threading.Event()
 
@@ -155,16 +293,27 @@ class IBApp(EWrapper, EClient):
 
 if __name__ == '__main__':
     print("=" * 50)
-    print("IB Options Monitor Bot - SPY Only")
+    print("IB Options Monitor Bot - GLD/SLV/SPY ETF Options")
     print("=" * 50)
-    print(f"Monitoring {len(contracts)} option contracts")
-    print(f"Symbols: {symbols}")
-    print(f"Strikes: {list(strike_ranges['SPY'])}")
-    print(f"Connecting to {IB_HOST}:{IB_PORT}...")
 
-    # Create app and connect
-    app = IBApp()
-    app.connect(IB_HOST, IB_PORT, clientId=IB_CLIENT_ID)
+    # Step 1: Fetch current prices for ETFs
+    prices = fetch_current_prices(IB_HOST, IB_PORT, IB_CLIENT_ID)
+
+    # Step 2: Build strike ranges based on forward prices
+    build_strike_ranges(prices)
+
+    # Step 3: Build option contracts
+    build_contracts()
+
+    print(f"\nMonitoring {len(contracts)} option contracts")
+    print(f"Symbols: {symbols}")
+    for sym in symbols:
+        print(f"  {sym}: {len(strike_ranges[sym])} strikes x {len(expiration_dates[sym])} expirations")
+    print(f"\nConnecting to {IB_HOST}:{IB_PORT}...")
+
+    # Create app and connect (use different client ID to avoid conflict)
+    app = IBApp(contracts, strike_ranges)
+    app.connect(IB_HOST, IB_PORT, clientId=IB_CLIENT_ID + 1)
 
     # Start API thread
     api_thread = threading.Thread(target=app.run, daemon=True)
@@ -183,7 +332,7 @@ if __name__ == '__main__':
     # 1 = REALTIME (requires subscription)
     # 3 = DELAYED (15-min delay, free)
     # 4 = FROZEN (last available)
-    app.reqMarketDataType(1)  # FROZEN - last available data
+    app.reqMarketDataType(1)  # REALTIME
     time.sleep(1)
 
     print("Subscribing to market data...")
@@ -197,30 +346,114 @@ if __name__ == '__main__':
     # Telegram command handlers
     @bot.message_handler(commands=['ivc'])
     def send_underlying_menu_calls(message):
-        # For SPY only, go directly to expiration
+        user_command_messages[message.chat.id] = message.text
+        # Show symbol selection first
         markup = types.InlineKeyboardMarkup()
-        for exp in expiration_dates['SPY']:
-            markup.add(types.InlineKeyboardButton(str(exp), callback_data=f'SPY_C_{exp}'))
-        bot.send_message(message.chat.id, "Select expiration (SPY Calls):", reply_markup=markup)
+        for sym in symbols:
+            markup.add(types.InlineKeyboardButton(sym, callback_data=f'SELECT_C_{sym}'))
+        bot.send_message(message.chat.id, "Select underlying (Calls):", reply_markup=markup)
 
     @bot.message_handler(commands=['ivp'])
     def send_underlying_menu_puts(message):
-        # For SPY only, go directly to expiration
+        user_command_messages[message.chat.id] = message.text
+        # Show symbol selection first
         markup = types.InlineKeyboardMarkup()
-        for exp in expiration_dates['SPY']:
-            markup.add(types.InlineKeyboardButton(str(exp), callback_data=f'SPY_P_{exp}'))
-        bot.send_message(message.chat.id, "Select expiration (SPY Puts):", reply_markup=markup)
+        for sym in symbols:
+            markup.add(types.InlineKeyboardButton(sym, callback_data=f'SELECT_P_{sym}'))
+        bot.send_message(message.chat.id, "Select underlying (Puts):", reply_markup=markup)
 
     @bot.message_handler(commands=['status'])
     def send_status(message):
-        bot.send_message(message.chat.id, f"Bot is running!\nMonitoring: SPY\nContracts: {len(contracts)}")
+        status_text = f"Bot is running!\nMonitoring: {', '.join(symbols)}\nContracts: {len(contracts)}"
+        bot.send_message(message.chat.id, status_text)
+
+    @bot.message_handler(commands=['menu', 'help', 'start'])
+    def send_menu(message):
+        """Show all available commands"""
+        menu_text = """📋 *IB Options Monitor Bot*
+_GLD/SLV/SPY ETF Options_
+
+*Commands:*
+
+📊 *Market Data*
+/ivc - IV smile for Calls (select underlying & expiry)
+/ivp - IV smile for Puts (select underlying & expiry)
+/atm - Show ATM (50Δ) strikes for all tenors
+
+ℹ️ *Info*
+/status - Bot status & contract count
+/menu - Show this menu
+
+*Monitored Underlyings:*
+• GLD (Gold ETF) - ±100 strikes
+• SLV (Silver ETF) - ±25 strikes
+• SPY (S&P 500 ETF) - ±50 strikes
+
+*Expirations:* Feb 20, Mar 20, Apr 17
+"""
+        bot.send_message(message.chat.id, menu_text, parse_mode='Markdown')
+
+    @bot.message_handler(commands=['atm'])
+    def send_atm_strikes(message):
+        """Show ATM (50 delta) strikes using forward price calculation (Option 2)"""
+        try:
+            # Fetch current prices (use different client_id to avoid conflict)
+            current_prices = fetch_current_prices(IB_HOST, IB_PORT, IB_CLIENT_ID + 100)
+
+            if not current_prices:
+                bot.send_message(message.chat.id, "Could not fetch current prices. Make sure IB Gateway is connected.")
+                return
+
+            # Calculate ATM strikes using forward price
+            atm_data = get_atm_strikes_option2(current_prices)
+
+            response = "📊 *ATM Strikes (Forward Price)*\n"
+            response += f"_Rate: 4.5%_\n\n"
+
+            for symbol in symbols:
+                spot = current_prices.get(symbol)
+                if not spot:
+                    response += f"*{symbol}*: No price data\n\n"
+                    continue
+
+                response += f"*{symbol}* (Spot: ${spot:.2f})\n"
+
+                for exp in expiration_dates[symbol]:
+                    data = atm_data.get((symbol, exp))
+                    if data:
+                        # Format expiration nicely (20260220 -> Feb 20)
+                        exp_date = datetime.datetime.strptime(str(exp), '%Y%m%d')
+                        exp_str = exp_date.strftime('%b %d')
+
+                        response += f"  {exp_str}: ATM={data['atm_strike']} (Fwd=${data['forward']:.2f}, DTE={data['days']})\n"
+
+                response += "\n"
+
+            bot.send_message(message.chat.id, response, parse_mode='Markdown')
+
+        except Exception as e:
+            bot.send_message(message.chat.id, f"Error calculating ATM strikes: {str(e)}")
 
     @bot.callback_query_handler(func=lambda call: True)
     def handler(call):
         bot.answer_callback_query(call.id)
-        argument = call.data  # e.g., SPY_C_20260220
+        argument = call.data
 
-        # Get current IV data (no historical data without ClickHouse)
+        # Handle symbol selection (SELECT_C_GLD or SELECT_P_SLV)
+        if argument.startswith('SELECT_'):
+            parts = argument.split('_')
+            option_type = parts[1]  # C or P
+            symbol = parts[2]       # GLD, SLV, SPY
+
+            markup = types.InlineKeyboardMarkup()
+            for exp in expiration_dates[symbol]:
+                markup.add(types.InlineKeyboardButton(str(exp), callback_data=f'{symbol}_{option_type}_{exp}'))
+            type_name = "Calls" if option_type == 'C' else "Puts"
+            bot.send_message(call.message.chat.id, f"Select expiration ({symbol} {type_name}):", reply_markup=markup)
+            return
+
+        # Handle expiration selection (GLD_C_20260220)
+        # Get current IV data (no historical data without database)
         for symbol_key, data in app.volatilities.items():
             if symbol_key == argument:
                 strks = list(data.keys())
@@ -263,7 +496,7 @@ if __name__ == '__main__':
     polling_thread = threading.Thread(target=bot.polling, daemon=True)
     polling_thread.start()
 
-    print("Bot is running! Use /ivc, /ivp, /status in Telegram")
+    print("Bot is running! Use /ivc, /ivp, /atm, /status, /menu in Telegram")
     print("Press Ctrl+C to stop")
 
     # Anomaly detection loop
