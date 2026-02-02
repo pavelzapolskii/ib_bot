@@ -234,6 +234,138 @@ def is_smile(x):
     return True
 
 
+def find_anomalies_spread_aware(vol_data):
+    """
+    Find anomaly points in the IV smile with spread-awareness.
+
+    Filters:
+    1. Only consider strikes with spread < 5% (in IV terms)
+    2. Anomaly spike must be > 1.5x the local spread
+    3. Arbitrage detection: bid at K > ask at K±1
+
+    Returns list of (strike_idx, reason, signal_strength) tuples.
+    signal_strength: 'STRONG' for arbitrage, 'NORMAL' for shape break
+    """
+    anomalies = []
+
+    # Extract data
+    n = len(vol_data)
+    if n < 3:
+        return anomalies
+
+    # Pre-calculate spreads for all strikes
+    spreads = []
+    for d in vol_data:
+        bid_vol = d['bid_vol']
+        ask_vol = d['ask_vol']
+        if bid_vol and ask_vol and bid_vol > 0:
+            spread = ask_vol - bid_vol
+            spread_pct = spread / ((bid_vol + ask_vol) / 2)  # Spread as % of mid
+        else:
+            spread = None
+            spread_pct = None
+        spreads.append({'spread': spread, 'spread_pct': spread_pct})
+
+    mid_vols = [d['mid_vol'] for d in vol_data]
+
+    # Check for arbitrage opportunities (bid at K > ask at K±1)
+    for i in range(n):
+        bid_vol_i = vol_data[i]['bid_vol']
+        spread_i = spreads[i]['spread_pct']
+
+        # Skip if spread is too wide (> 5%)
+        if spread_i is None or spread_i > 0.05:
+            continue
+
+        # Check against previous strike (K-1)
+        if i > 0:
+            ask_vol_prev = vol_data[i-1]['ask_vol']
+            spread_prev = spreads[i-1]['spread_pct']
+            if ask_vol_prev and spread_prev is not None and spread_prev <= 0.05:
+                if bid_vol_i > ask_vol_prev:
+                    diff = (bid_vol_i - ask_vol_prev) * 100
+                    anomalies.append((i, f"ARBITRAGE: Bid IV > Ask IV at K-1 by {diff:.1f}%", 'STRONG'))
+
+        # Check against next strike (K+1)
+        if i < n - 1:
+            ask_vol_next = vol_data[i+1]['ask_vol']
+            spread_next = spreads[i+1]['spread_pct']
+            if ask_vol_next and spread_next is not None and spread_next <= 0.05:
+                if bid_vol_i > ask_vol_next:
+                    diff = (bid_vol_i - ask_vol_next) * 100
+                    anomalies.append((i, f"ARBITRAGE: Bid IV > Ask IV at K+1 by {diff:.1f}%", 'STRONG'))
+
+    # Shape-based anomaly detection with spread threshold
+    prev_dec = True
+    for i in range(1, n):
+        spread_i = spreads[i]['spread']
+        spread_prev = spreads[i-1]['spread']
+
+        # Skip if spread data missing or too wide
+        if spread_i is None or spread_prev is None:
+            continue
+        if spreads[i]['spread_pct'] is not None and spreads[i]['spread_pct'] > 0.05:
+            continue
+        if spreads[i-1]['spread_pct'] is not None and spreads[i-1]['spread_pct'] > 0.05:
+            continue
+
+        # Local spread = average of adjacent spreads
+        local_spread = (spread_i + spread_prev) / 2
+        min_threshold = local_spread * 1.5  # Spike must be > 1.5x local spread
+
+        if mid_vols[i-1] > mid_vols[i]:
+            # IV is decreasing
+            drop = mid_vols[i-1] - mid_vols[i]
+            if not prev_dec and drop > 0.01 and drop > min_threshold:
+                # Was increasing, now decreasing significantly - anomaly at i-1
+                anomalies.append((i-1, f"IV spike: +{drop*100:.1f}% (>{min_threshold*100:.1f}% threshold)", 'NORMAL'))
+        else:
+            # IV is increasing
+            rise = mid_vols[i] - mid_vols[i-1]
+            if prev_dec and rise > 0.01 and rise > min_threshold:
+                # Was decreasing, now increasing significantly
+                anomalies.append((i, f"IV dip: +{rise*100:.1f}% (>{min_threshold*100:.1f}% threshold)", 'NORMAL'))
+            prev_dec = False
+
+    # Deduplicate (same index might have multiple reasons)
+    seen_indices = set()
+    unique_anomalies = []
+    for idx, reason, strength in anomalies:
+        if idx not in seen_indices or strength == 'STRONG':
+            if idx in seen_indices:
+                # Replace with stronger signal
+                unique_anomalies = [(i, r, s) for i, r, s in unique_anomalies if i != idx]
+            unique_anomalies.append((idx, reason, strength))
+            seen_indices.add(idx)
+
+    return unique_anomalies
+
+
+def calculate_intrinsic_value(strike, underlying_price, option_type):
+    """Calculate intrinsic value of an option"""
+    if option_type == 'C':
+        return max(0, underlying_price - strike)
+    else:  # Put
+        return max(0, strike - underlying_price)
+
+
+def calculate_time_value_annualized(option_price, intrinsic_value, underlying_price, days_to_expiry):
+    """
+    Calculate annualized time value as a percentage.
+    Time Value = Option Price - Intrinsic Value
+    Annualized = (Time Value / Underlying Price) * (365 / DTE) * 100
+    """
+    if days_to_expiry <= 0:
+        return 0
+
+    time_value = option_price - intrinsic_value
+    if time_value < 0:
+        time_value = 0
+
+    annualized = (time_value / underlying_price) * (365 / days_to_expiry) * 100
+    return annualized
+
+
 class IBApp(EWrapper, EClient):
     def __init__(self, contracts_list, strike_ranges_dict):
         EClient.__init__(self, self)
@@ -242,10 +374,14 @@ class IBApp(EWrapper, EClient):
         self.contract_details = {}
         self.connected_event = threading.Event()
 
-        # Store bid/ask IV per contract
+        # Store bid/ask IV and prices per contract
         self.volatilities = {
             c.symbol + "_" + c.right + "_" + c.lastTradeDateOrContractMonth: {
-                strike: {'bid_vol': None, 'ask_vol': None}
+                strike: {
+                    'bid_vol': None, 'ask_vol': None,
+                    'bid_price': None, 'ask_price': None,
+                    'underlying_price': None
+                }
                 for strike in self.strike_ranges[c.symbol]
             }
             for c in self.contracts
@@ -305,12 +441,16 @@ class IBApp(EWrapper, EClient):
         symbol_key = contract.symbol + "_" + contract.right + "_" + contract.lastTradeDateOrContractMonth
         strike = contract.strike
 
-        # Store IV from IB
+        # Store IV and prices from IB
         if field == 10:  # BID
             self.volatilities[symbol_key][strike]['bid_vol'] = impliedVolatility
+            self.volatilities[symbol_key][strike]['bid_price'] = optPrice
+            self.volatilities[symbol_key][strike]['underlying_price'] = undPrice
             data_type = 'BID'
         elif field == 11:  # ASK
             self.volatilities[symbol_key][strike]['ask_vol'] = impliedVolatility
+            self.volatilities[symbol_key][strike]['ask_price'] = optPrice
+            self.volatilities[symbol_key][strike]['underlying_price'] = undPrice
             data_type = 'ASK'
         else:
             return
@@ -620,25 +760,115 @@ _GLD/SLV/SPY ETF Options_
             strks = list(sorted(list(vols.keys())))
             mid_vols = []
             real_strks = []
+            vol_data = []  # Store full data for anomaly reporting
 
             for strk in strks:
                 if vols[strk]['bid_vol'] is None or vols[strk]['ask_vol'] is None:
                     continue
-                mid_vols.append((vols[strk]['bid_vol'] + vols[strk]['ask_vol']) / 2)
+                mid_vol = (vols[strk]['bid_vol'] + vols[strk]['ask_vol']) / 2
+                mid_vols.append(mid_vol)
                 real_strks.append(strk)
+                vol_data.append({
+                    'strike': strk,
+                    'bid_vol': vols[strk]['bid_vol'],
+                    'ask_vol': vols[strk]['ask_vol'],
+                    'mid_vol': mid_vol,
+                    'bid_price': vols[strk].get('bid_price'),
+                    'ask_price': vols[strk].get('ask_price'),
+                    'underlying_price': vols[strk].get('underlying_price')
+                })
 
-            if mid_vols and not is_smile(mid_vols):
+            # Use spread-aware anomaly detection
+            anomalies = find_anomalies_spread_aware(vol_data)
+
+            if anomalies:
                 if name not in last_anom or seconds_to_now(last_anom[name]) > 60 * 30:
-                    plt.figure(figsize=(10, 6))
-                    plt.scatter(real_strks, mid_vols)
+                    # Parse name to get option type and expiration
+                    parts = name.split('_')
+                    symbol = parts[0]
+                    option_type = parts[1]
+                    expiration = parts[2]
+
+                    # Calculate DTE
+                    dte = calculate_days_to_expiry(expiration)
+
+                    # Separate strong (arbitrage) from normal anomalies
+                    strong_anomalies = [(i, r, s) for i, r, s in anomalies if s == 'STRONG']
+                    normal_anomalies = [(i, r, s) for i, r, s in anomalies if s == 'NORMAL']
+
+                    # Create plot with highlighted anomalies
+                    plt.figure(figsize=(12, 7))
+                    plt.scatter(real_strks, mid_vols, label='Mid IV', color='blue', alpha=0.6)
+
+                    # Highlight normal anomaly points (yellow X)
+                    if normal_anomalies:
+                        normal_strks = [real_strks[idx] for idx, _, _ in normal_anomalies]
+                        normal_vols = [mid_vols[idx] for idx, _, _ in normal_anomalies]
+                        plt.scatter(normal_strks, normal_vols, color='orange', s=150, marker='X', label='Shape Anomaly', zorder=5)
+
+                    # Highlight strong anomaly points (red star)
+                    if strong_anomalies:
+                        strong_strks = [real_strks[idx] for idx, _, _ in strong_anomalies]
+                        strong_vols = [mid_vols[idx] for idx, _, _ in strong_anomalies]
+                        plt.scatter(strong_strks, strong_vols, color='red', s=200, marker='*', label='ARBITRAGE', zorder=6)
+
+                    # Add annotations for all anomalies
+                    for idx, reason, strength in anomalies:
+                        color = 'red' if strength == 'STRONG' else 'orange'
+                        plt.annotate(f'K={real_strks[idx]}',
+                                   (real_strks[idx], mid_vols[idx]),
+                                   textcoords="offset points", xytext=(0,10),
+                                   ha='center', fontsize=9, color=color, fontweight='bold' if strength == 'STRONG' else 'normal')
+
                     plt.grid(True)
+                    plt.legend()
                     plt.xlabel('Strike')
                     plt.ylabel('Mid IV')
                     plt.ylim([round_down_to_closest_10(min(mid_vols)), round_up_to_closest_10(max(mid_vols))])
-                    plt.title(f'Anomaly in {name}')
+
+                    # Title indicates if there's arbitrage
+                    if strong_anomalies:
+                        plt.title(f'⚠️ ARBITRAGE in {name} (DTE={dte})')
+                    else:
+                        plt.title(f'Anomaly in {name} (DTE={dte})')
                     plt.savefig('vol.png', dpi=100, bbox_inches='tight')
                     plt.close()
 
+                    # Build detailed message
+                    if strong_anomalies:
+                        msg = f"🔥 *ARBITRAGE detected in {name}*\n"
+                    else:
+                        msg = f"🚨 *Anomaly detected in {name}*\n"
+                    msg += f"_DTE: {dte} days_\n\n"
+
+                    for idx, reason, strength in anomalies:
+                        data = vol_data[idx]
+                        strk = data['strike']
+                        bid_vol = data['bid_vol']
+                        ask_vol = data['ask_vol']
+                        bid_price = data['bid_price']
+                        ask_price = data['ask_price']
+                        und_price = data['underlying_price']
+
+                        # Calculate spread
+                        iv_spread = (ask_vol - bid_vol) * 100
+                        iv_spread_pct = (ask_vol - bid_vol) / ((bid_vol + ask_vol) / 2) * 100
+
+                        prefix = "🔥" if strength == 'STRONG' else "⚠️"
+                        msg += f"{prefix} *Strike {strk}:* {reason}\n"
+                        msg += f"  IV: Bid={bid_vol*100:.1f}% / Ask={ask_vol*100:.1f}% (spread={iv_spread:.1f}%, {iv_spread_pct:.1f}%)\n"
+
+                        # Calculate time value if we have prices
+                        if bid_price and ask_price and und_price and dte > 0:
+                            intrinsic = calculate_intrinsic_value(strk, und_price, option_type)
+                            bid_tv_ann = calculate_time_value_annualized(bid_price, intrinsic, und_price, dte)
+                            ask_tv_ann = calculate_time_value_annualized(ask_price, intrinsic, und_price, dte)
+                            price_spread = ask_price - bid_price
+                            msg += f"  Price: Bid=${bid_price:.2f} / Ask=${ask_price:.2f} (spread=${price_spread:.2f})\n"
+                            msg += f"  Intrinsic: ${intrinsic:.2f}\n"
+                            msg += f"  Time Value (ann): Bid={bid_tv_ann:.1f}% / Ask={ask_tv_ann:.1f}%\n"
+                        msg += "\n"
+
                     bot.send_photo(chat_id, open('vol.png', 'rb'))
-                    bot.send_message(chat_id, f'Anomaly detected in {name}')
+                    bot.send_message(chat_id, msg, parse_mode='Markdown')
                     last_anom[name] = datetime.datetime.now()
