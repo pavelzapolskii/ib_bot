@@ -918,11 +918,15 @@ _Only alerts when spread < 5%_
                         # Calculate time value if we have prices
                         if bid_price and ask_price and und_price and dte > 0:
                             intrinsic = calculate_intrinsic_value(strk, und_price, option_type)
+                            bid_tv = bid_price - intrinsic
+                            ask_tv = ask_price - intrinsic
                             bid_tv_ann = calculate_time_value_annualized(bid_price, intrinsic, und_price, dte)
                             ask_tv_ann = calculate_time_value_annualized(ask_price, intrinsic, und_price, dte)
                             price_spread = ask_price - bid_price
+                            msg += f"  Underlying: ${und_price:.2f}\n"
                             msg += f"  Price: Bid=${bid_price:.2f} / Ask=${ask_price:.2f} (spread=${price_spread:.2f})\n"
                             msg += f"  Intrinsic: ${intrinsic:.2f}\n"
+                            msg += f"  Time Value: Bid=${bid_tv:.2f} / Ask=${ask_tv:.2f}\n"
                             msg += f"  Time Value (ann): Bid={bid_tv_ann:.1f}% / Ask={ask_tv_ann:.1f}%\n"
                         msg += "\n"
 
