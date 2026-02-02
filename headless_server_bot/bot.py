@@ -519,10 +519,20 @@ _GLD/SLV/SPY ETF Options_
 /ivc - IV smile for Calls (select underlying & expiry)
 /ivp - IV smile for Puts (select underlying & expiry)
 /atm - Show ATM (50Δ) strikes for all tenors
+/calc - Calculate best trades (sell put vol / buy call insurance)
 
 ℹ️ *Info*
 /status - Bot status & contract count
 /menu - Show this menu
+
+*Calc Options:*
+• Best Put to Sell Vol - highest IV/spread for OTM puts
+• Best Call Insurance - lowest IV/spread for ITM calls
+
+*Anomaly Signals:*
+🔥 ARBITRAGE - Bid IV > Ask IV at adjacent strike (strong)
+⚠️ Shape Anomaly - IV spike > 1.5x local spread
+_Only alerts when spread < 5%_
 
 *Monitored Underlyings:*
 • GLD (Gold ETF) - ±100 strikes
@@ -532,6 +542,14 @@ _GLD/SLV/SPY ETF Options_
 *Expirations:* Feb 20, Mar 20, Apr 17
 """
         bot.send_message(message.chat.id, menu_text, parse_mode='Markdown')
+
+    @bot.message_handler(commands=['calc'])
+    def send_calc_menu(message):
+        """Show calculation options menu"""
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("📉 Best Put to Sell Vol", callback_data='CALC_SELLPUT'))
+        markup.add(types.InlineKeyboardButton("📈 Best Call Insurance", callback_data='CALC_BUYCALL'))
+        bot.send_message(message.chat.id, "Select calculation:", reply_markup=markup)
 
     @bot.message_handler(commands=['atm'])
     def send_atm_strikes(message):
@@ -578,6 +596,157 @@ _GLD/SLV/SPY ETF Options_
     def handler(call):
         bot.answer_callback_query(call.id)
         argument = call.data
+
+        # Handle CALC options
+        if argument.startswith('CALC_'):
+            calc_type = argument.split('_')[1]
+
+            if calc_type == 'SELLPUT':
+                # Best Put to Sell Vol: highest IV/spread for OTM puts
+                msg = "📉 *Best Puts to Sell Vol*\n"
+                msg += "_Metric: IV / Spread (higher = better)_\n"
+                msg += "_Filter: OTM puts only (strike < underlying)_\n\n"
+
+                results = []
+                for name, vols in app.volatilities.items():
+                    parts = name.split('_')
+                    symbol = parts[0]
+                    option_type = parts[1]
+                    expiration = parts[2]
+
+                    # Only process puts
+                    if option_type != 'P':
+                        continue
+
+                    dte = calculate_days_to_expiry(expiration)
+                    exp_date = datetime.datetime.strptime(str(expiration), '%Y%m%d')
+                    exp_str = exp_date.strftime('%b %d')
+
+                    for strike, data in vols.items():
+                        bid_vol = data.get('bid_vol')
+                        ask_vol = data.get('ask_vol')
+                        und_price = data.get('underlying_price')
+
+                        if bid_vol is None or ask_vol is None or und_price is None:
+                            continue
+
+                        # OTM put = strike < underlying price
+                        if strike >= und_price:
+                            continue
+
+                        spread = ask_vol - bid_vol
+                        mid_vol = (bid_vol + ask_vol) / 2
+                        spread_pct = spread / mid_vol if mid_vol > 0 else 999
+
+                        # Skip wide spreads (> 10%)
+                        if spread_pct > 0.10:
+                            continue
+
+                        # Metric: IV / spread (higher is better for selling vol)
+                        if spread > 0:
+                            metric = mid_vol / spread
+                        else:
+                            metric = 0
+
+                        results.append({
+                            'symbol': symbol,
+                            'strike': strike,
+                            'expiration': exp_str,
+                            'dte': dte,
+                            'mid_vol': mid_vol,
+                            'spread': spread,
+                            'spread_pct': spread_pct,
+                            'metric': metric,
+                            'und_price': und_price
+                        })
+
+                # Sort by metric (highest first)
+                results.sort(key=lambda x: x['metric'], reverse=True)
+
+                # Show top 5
+                for i, r in enumerate(results[:5]):
+                    otm_pct = (r['und_price'] - r['strike']) / r['und_price'] * 100
+                    msg += f"*{i+1}. {r['symbol']} {r['strike']}P {r['expiration']}*\n"
+                    msg += f"   IV: {r['mid_vol']*100:.1f}% | Spread: {r['spread']*100:.1f}% ({r['spread_pct']*100:.0f}%)\n"
+                    msg += f"   OTM: {otm_pct:.1f}% | DTE: {r['dte']} | Score: {r['metric']:.1f}\n\n"
+
+                if not results:
+                    msg += "_No valid OTM puts with tight spreads found_"
+
+                bot.send_message(call.message.chat.id, msg, parse_mode='Markdown')
+                return
+
+            elif calc_type == 'BUYCALL':
+                # Best Call Insurance: lowest IV/spread for ITM calls
+                msg = "📈 *Best Calls for Insurance*\n"
+                msg += "_Metric: IV × Spread (lower = better)_\n"
+                msg += "_Filter: ITM calls only (strike < underlying)_\n\n"
+
+                results = []
+                for name, vols in app.volatilities.items():
+                    parts = name.split('_')
+                    symbol = parts[0]
+                    option_type = parts[1]
+                    expiration = parts[2]
+
+                    # Only process calls
+                    if option_type != 'C':
+                        continue
+
+                    dte = calculate_days_to_expiry(expiration)
+                    exp_date = datetime.datetime.strptime(str(expiration), '%Y%m%d')
+                    exp_str = exp_date.strftime('%b %d')
+
+                    for strike, data in vols.items():
+                        bid_vol = data.get('bid_vol')
+                        ask_vol = data.get('ask_vol')
+                        und_price = data.get('underlying_price')
+
+                        if bid_vol is None or ask_vol is None or und_price is None:
+                            continue
+
+                        # ITM call = strike < underlying price
+                        if strike >= und_price:
+                            continue
+
+                        spread = ask_vol - bid_vol
+                        mid_vol = (bid_vol + ask_vol) / 2
+                        spread_pct = spread / mid_vol if mid_vol > 0 else 999
+
+                        # Skip wide spreads (> 10%)
+                        if spread_pct > 0.10:
+                            continue
+
+                        # Metric: IV * spread (lower is better for buying insurance)
+                        metric = mid_vol * spread
+
+                        results.append({
+                            'symbol': symbol,
+                            'strike': strike,
+                            'expiration': exp_str,
+                            'dte': dte,
+                            'mid_vol': mid_vol,
+                            'spread': spread,
+                            'spread_pct': spread_pct,
+                            'metric': metric,
+                            'und_price': und_price
+                        })
+
+                # Sort by metric (lowest first)
+                results.sort(key=lambda x: x['metric'])
+
+                # Show top 5
+                for i, r in enumerate(results[:5]):
+                    itm_pct = (r['und_price'] - r['strike']) / r['und_price'] * 100
+                    msg += f"*{i+1}. {r['symbol']} {r['strike']}C {r['expiration']}*\n"
+                    msg += f"   IV: {r['mid_vol']*100:.1f}% | Spread: {r['spread']*100:.1f}% ({r['spread_pct']*100:.0f}%)\n"
+                    msg += f"   ITM: {itm_pct:.1f}% | DTE: {r['dte']} | Score: {r['metric']*10000:.2f}\n\n"
+
+                if not results:
+                    msg += "_No valid ITM calls with tight spreads found_"
+
+                bot.send_message(call.message.chat.id, msg, parse_mode='Markdown')
+                return
 
         # Handle symbol selection (SELECT_C_GLD or SELECT_P_SLV)
         if argument.startswith('SELECT_'):
