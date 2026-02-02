@@ -612,8 +612,8 @@ if __name__ == '__main__':
     time.sleep(1)
 
     print("Subscribing to market data...")
-    BATCH_SIZE = 50  # Number of requests before pausing
-    BATCH_SLEEP = 1  # Seconds to sleep between batches
+    BATCH_SIZE = 40  # Number of requests before pausing
+    BATCH_SLEEP = 2  # Seconds to sleep between batches
 
     for i, contract in enumerate(app.contracts):
         app.reqMktData(i, contract, "232", False, False, [])
@@ -1059,7 +1059,7 @@ _Only alerts when spread < 5%_
     # Anomaly detection loop
     last_anom = dict()
     start_time = datetime.datetime.now()
-    WARMUP_SECONDS = 60  # Don't send alerts during first minute while curves are building
+    WARMUP_SECONDS = 90  # Don't send alerts during first 90 seconds while curves are building
 
     while True:
         time.sleep(30)
