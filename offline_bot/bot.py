@@ -764,11 +764,11 @@ _Only alerts when spread < 5%_
             calc_type = parts[2]  # SELLPUT or BUYCALL
 
             if calc_type == 'SELLPUT':
-                # Best Put to Sell Vol: highest IV/spread for OTM puts, further from forward = better
+                # Best Put to Sell Vol: deep ITM puts (strike > forward), higher strike = better
                 asset_label = "All Assets" if asset_filter == "ALL" else asset_filter
                 msg = f"📉 *Best Puts to Sell Vol ({asset_label})*\n"
-                msg += "_Metric: (IV / Spread) × (1 + OTM%)_\n"
-                msg += "_Filter: OTM puts, further from forward = better_\n\n"
+                msg += "_Metric: (IV / Spread) × (1 + ITM%)_\n"
+                msg += "_Filter: Deep ITM puts, higher strike = better_\n\n"
 
                 results = []
                 for name, vols in app.volatilities.items():
@@ -806,8 +806,8 @@ _Only alerts when spread < 5%_
                         if bid_vol is None or ask_vol is None or und_price is None:
                             continue
 
-                        # OTM put = strike < forward price
-                        if strike >= forward:
+                        # ITM put = strike > forward price
+                        if strike <= forward:
                             continue
 
                         spread = ask_vol - bid_vol
@@ -818,14 +818,14 @@ _Only alerts when spread < 5%_
                         if spread_pct > 0.10:
                             continue
 
-                        # Distance from forward (OTM percentage)
-                        otm_pct = (forward - strike) / forward * 100
+                        # Distance from forward (ITM percentage) - higher strike = more ITM for puts
+                        itm_pct = (strike - forward) / forward * 100
 
-                        # Metric: (IV / spread) × (1 + OTM%/100)
-                        # Further OTM = higher bonus
+                        # Metric: (IV / spread) × (1 + ITM%/100)
+                        # Deeper ITM (higher strike) = higher bonus
                         if spread > 0:
                             base_metric = mid_vol / spread
-                            metric = base_metric * (1 + otm_pct / 100)
+                            metric = base_metric * (1 + itm_pct / 100)
                         else:
                             metric = 0
 
@@ -849,7 +849,7 @@ _Only alerts when spread < 5%_
                             'metric': metric,
                             'und_price': und_price,
                             'forward': forward,
-                            'otm_pct': otm_pct,
+                            'itm_pct': itm_pct,
                             'bid_price': bid_price,
                             'ask_price': ask_price,
                             'tv_ann_bid': tv_ann_bid,
@@ -867,20 +867,20 @@ _Only alerts when spread < 5%_
                         msg += f"   Price: ${r['bid_price']:.2f} / ${r['ask_price']:.2f}\n"
                     if r['tv_ann_bid'] is not None and r['tv_ann_ask'] is not None:
                         msg += f"   TV(ann): {r['tv_ann_bid']:.1f}% / {r['tv_ann_ask']:.1f}%\n"
-                    msg += f"   OTM: {r['otm_pct']:.1f}% (Fwd=${r['forward']:.2f}) | DTE: {r['dte']} | Score: {r['metric']:.1f}\n\n"
+                    msg += f"   ITM: {r['itm_pct']:.1f}% (Fwd=${r['forward']:.2f}) | DTE: {r['dte']} | Score: {r['metric']:.1f}\n\n"
 
                 if not results:
-                    msg += "_No valid OTM puts with tight spreads found_"
+                    msg += "_No valid ITM puts with tight spreads found_"
 
                 bot.send_message(call.message.chat.id, msg, parse_mode='Markdown')
                 return
 
             elif calc_type == 'BUYCALL':
-                # Best Call Insurance: lowest IV/spread for OTM calls, further from forward = better
+                # Best Call Insurance: deep ITM calls (strike < forward), lower strike = better
                 asset_label = "All Assets" if asset_filter == "ALL" else asset_filter
                 msg = f"📈 *Best Calls for Insurance ({asset_label})*\n"
-                msg += "_Metric: (IV × Spread) / (1 + OTM%)_\n"
-                msg += "_Filter: OTM calls, further from forward = better_\n\n"
+                msg += "_Metric: (IV × Spread) / (1 + ITM%)_\n"
+                msg += "_Filter: Deep ITM calls, lower strike = better_\n\n"
 
                 results = []
                 for name, vols in app.volatilities.items():
@@ -918,8 +918,8 @@ _Only alerts when spread < 5%_
                         if bid_vol is None or ask_vol is None or und_price is None:
                             continue
 
-                        # OTM call = strike > forward price
-                        if strike <= forward:
+                        # ITM call = strike < forward price
+                        if strike >= forward:
                             continue
 
                         spread = ask_vol - bid_vol
@@ -930,13 +930,13 @@ _Only alerts when spread < 5%_
                         if spread_pct > 0.10:
                             continue
 
-                        # Distance from forward (OTM percentage)
-                        otm_pct = (strike - forward) / forward * 100
+                        # Distance from forward (ITM percentage) - lower strike = more ITM for calls
+                        itm_pct = (forward - strike) / forward * 100
 
-                        # Metric: (IV × spread) / (1 + OTM%/100)
-                        # Further OTM = lower metric (better - cheaper insurance)
+                        # Metric: (IV × spread) / (1 + ITM%/100)
+                        # Deeper ITM (lower strike) = lower metric (better - cheaper insurance)
                         base_metric = mid_vol * spread
-                        metric = base_metric / (1 + otm_pct / 100)
+                        metric = base_metric / (1 + itm_pct / 100)
 
                         # Calculate time value annualized
                         tv_ann_bid = None
@@ -958,7 +958,7 @@ _Only alerts when spread < 5%_
                             'metric': metric,
                             'und_price': und_price,
                             'forward': forward,
-                            'otm_pct': otm_pct,
+                            'itm_pct': itm_pct,
                             'bid_price': bid_price,
                             'ask_price': ask_price,
                             'tv_ann_bid': tv_ann_bid,
@@ -976,10 +976,10 @@ _Only alerts when spread < 5%_
                         msg += f"   Price: ${r['bid_price']:.2f} / ${r['ask_price']:.2f}\n"
                     if r['tv_ann_bid'] is not None and r['tv_ann_ask'] is not None:
                         msg += f"   TV(ann): {r['tv_ann_bid']:.1f}% / {r['tv_ann_ask']:.1f}%\n"
-                    msg += f"   OTM: {r['otm_pct']:.1f}% (Fwd=${r['forward']:.2f}) | DTE: {r['dte']} | Score: {r['metric']*10000:.2f}\n\n"
+                    msg += f"   ITM: {r['itm_pct']:.1f}% (Fwd=${r['forward']:.2f}) | DTE: {r['dte']} | Score: {r['metric']*10000:.2f}\n\n"
 
                 if not results:
-                    msg += "_No valid OTM calls with tight spreads found_"
+                    msg += "_No valid ITM calls with tight spreads found_"
 
                 bot.send_message(call.message.chat.id, msg, parse_mode='Markdown')
                 return
