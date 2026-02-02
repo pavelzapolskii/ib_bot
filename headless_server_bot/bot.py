@@ -157,6 +157,94 @@ def fetch_current_prices(host, port, client_id):
     return fetcher.prices
 
 
+class IVSmileFetcher(EWrapper, EClient):
+    """Fetch fresh IV smile data for a specific symbol/expiration"""
+    def __init__(self, symbol, expiration, option_type, strikes):
+        EClient.__init__(self, self)
+        self.symbol = symbol
+        self.expiration = expiration
+        self.option_type = option_type
+        self.strikes = strikes
+        self.iv_data = {s: {'bid_vol': None, 'ask_vol': None, 'bid_price': None, 'ask_price': None, 'underlying_price': None} for s in strikes}
+        self.received_count = 0
+        self.expected_count = len(strikes) * 2  # bid and ask for each strike
+        self.done_event = threading.Event()
+        self.reqId_to_strike = {}
+
+    def error(self, reqId, errorCode, errorString, advancedOrderRejectJson=""):
+        if errorCode not in [2104, 2106, 2158]:
+            print(f"IVSmileFetcher Error {reqId} {errorCode}: {errorString}")
+        # If we get an error for a contract, count it as received to avoid hanging
+        if errorCode in [200, 10091]:  # No security / subscription needed
+            self.received_count += 2  # Count both bid and ask as done
+            if self.received_count >= self.expected_count:
+                self.done_event.set()
+
+    def nextValidId(self, orderId):
+        pass
+
+    def tickOptionComputation(self, tickerId, field, tickAttrib, impliedVolatility, delta, optPrice, pvDividend, gamma, vega, theta, undPrice):
+        strike = self.reqId_to_strike.get(tickerId)
+        if strike is None:
+            return
+
+        if impliedVolatility is not None and impliedVolatility > 0:
+            if field == 10:  # BID
+                self.iv_data[strike]['bid_vol'] = impliedVolatility
+                self.iv_data[strike]['bid_price'] = optPrice
+                self.iv_data[strike]['underlying_price'] = undPrice
+                self.received_count += 1
+            elif field == 11:  # ASK
+                self.iv_data[strike]['ask_vol'] = impliedVolatility
+                self.iv_data[strike]['ask_price'] = optPrice
+                self.iv_data[strike]['underlying_price'] = undPrice
+                self.received_count += 1
+
+        if self.received_count >= self.expected_count:
+            self.done_event.set()
+
+
+def fetch_iv_smile(host, port, client_id, symbol, expiration, option_type, strikes):
+    """Fetch fresh IV smile for a specific symbol/expiration"""
+    print(f"Fetching fresh IV smile for {symbol} {option_type} {expiration}...")
+
+    fetcher = IVSmileFetcher(symbol, expiration, option_type, strikes)
+    fetcher.connect(host, port, clientId=client_id)
+
+    api_thread = threading.Thread(target=fetcher.run, daemon=True)
+    api_thread.start()
+    time.sleep(1)  # Wait for connection
+
+    # Request market data type (realtime)
+    fetcher.reqMarketDataType(1)
+    time.sleep(0.5)
+
+    # Request market data for each strike
+    for i, strike in enumerate(strikes):
+        contract = Contract()
+        contract.symbol = symbol
+        contract.secType = "OPT"
+        contract.exchange = "SMART"
+        contract.currency = "USD"
+        contract.lastTradeDateOrContractMonth = expiration
+        contract.strike = float(strike)
+        contract.right = option_type
+
+        fetcher.reqId_to_strike[i] = strike
+        fetcher.reqMktData(i, contract, "232", False, False, [])
+
+        # Rate limiting
+        if (i + 1) % 40 == 0:
+            time.sleep(1)
+
+    # Wait for data (max 15 seconds)
+    fetcher.done_event.wait(timeout=15)
+    fetcher.disconnect()
+    time.sleep(0.5)
+
+    return fetcher.iv_data
+
+
 def build_strike_ranges(prices):
     """Build strike ranges based on FORWARD prices (longest tenor)"""
     global strike_ranges
@@ -898,15 +986,51 @@ _Only alerts when spread < 5%_
             return
 
         # Handle expiration selection (GLD_C_20260220)
-        # Get current IV data (no historical data without database)
-        for symbol_key, data in app.volatilities.items():
-            if symbol_key == argument:
-                strks = list(data.keys())
-                bidvol = np.array([data[s]['bid_vol'] for s in strks])
-                askvol = np.array([data[s]['ask_vol'] for s in strks])
-                break
-        else:
-            bot.send_message(call.message.chat.id, "No data found for this selection.")
+        # Parse the argument to get symbol, option_type, expiration
+        parts = argument.split('_')
+        if len(parts) != 3:
+            bot.send_message(call.message.chat.id, "Invalid selection format.")
+            return
+
+        symbol = parts[0]
+        option_type = parts[1]
+        expiration = parts[2]
+
+        # Check if we have strike ranges for this symbol
+        if symbol not in strike_ranges:
+            bot.send_message(call.message.chat.id, f"No strike range defined for {symbol}.")
+            return
+
+        strikes = list(strike_ranges[symbol])
+
+        # Send "fetching" message
+        bot.send_message(call.message.chat.id, f"🔄 Fetching fresh IV data for {symbol} {option_type} {expiration}...")
+
+        try:
+            # Fetch fresh IV data using a separate IB connection
+            iv_data = fetch_iv_smile(IB_HOST, IB_PORT, IB_CLIENT_ID + 200, symbol, expiration, option_type, strikes)
+
+            # Update the main app's volatilities with fresh data
+            symbol_key = f"{symbol}_{option_type}_{expiration}"
+            if symbol_key in app.volatilities:
+                for strike, data in iv_data.items():
+                    if strike in app.volatilities[symbol_key]:
+                        if data['bid_vol'] is not None:
+                            app.volatilities[symbol_key][strike]['bid_vol'] = data['bid_vol']
+                            app.volatilities[symbol_key][strike]['bid_price'] = data['bid_price']
+                        if data['ask_vol'] is not None:
+                            app.volatilities[symbol_key][strike]['ask_vol'] = data['ask_vol']
+                            app.volatilities[symbol_key][strike]['ask_price'] = data['ask_price']
+                        if data['underlying_price'] is not None:
+                            app.volatilities[symbol_key][strike]['underlying_price'] = data['underlying_price']
+
+            # Extract data for plotting
+            strks = strikes
+            bidvol = np.array([iv_data[s]['bid_vol'] for s in strks])
+            askvol = np.array([iv_data[s]['ask_vol'] for s in strks])
+
+        except Exception as e:
+            bot.send_message(call.message.chat.id, f"Error fetching data: {str(e)}")
             return
 
         # Filter out None values
@@ -915,7 +1039,7 @@ _Only alerts when spread < 5%_
 
         all_valid = valid_bids + valid_asks
         if not all_valid:
-            bot.send_message(call.message.chat.id, "No data available yet. Please wait for market data.")
+            bot.send_message(call.message.chat.id, "No IV data received. Market may be closed or no quotes available.")
             return
 
         min_value = round_down_to_closest_10(min(all_valid))
@@ -931,11 +1055,15 @@ _Only alerts when spread < 5%_
         plt.xlabel('Strike')
         plt.ylabel('Implied Volatility')
         plt.ylim([min_value, max_value])
-        plt.title(f'IV Smile: {argument}')
+        plt.title(f'IV Smile: {argument} (Fresh)')
         plt.savefig('vol.png', dpi=100, bbox_inches='tight')
         plt.close()
 
-        bot.send_photo(chat_id, open('vol.png', 'rb'))
+        # Count how many data points we got
+        bid_count = sum(1 for v in bidvol if v is not None)
+        ask_count = sum(1 for v in askvol if v is not None)
+
+        bot.send_photo(call.message.chat.id, open('vol.png', 'rb'), caption=f"✅ Fresh data: {bid_count} bids, {ask_count} asks")
 
     # Start Telegram polling in separate thread
     polling_thread = threading.Thread(target=bot.polling, daemon=True)
