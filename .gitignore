@@ -22,26 +22,25 @@ vol.png
 # IB API archive
 *.zip
 
-# IB API source (not needed in repo)
-IBJts/
-META-INF/
-ibapi/
-
-# Unused files (kept locally but not committed)
-bear_spread_strategy.py
-volatility_scanner.py
-option_chain_params.py
-iv_smile_analysis.py
-bot_simple.py
-market_data_fetcher.py
-scanner.ipynb
-her.ipynb
-scanner_params.xml
-
-# Offline version with ClickHouse (backup)
-bot_with_clickhouse.py
-connection.py
-sql/
-
 # Jupyter checkpoints
 .ipynb_checkpoints/
+
+# Root level files (moved to subfolders) - prefix with / to only ignore at root
+/bot_tests.py
+/bot_with_clickhouse.py
+/bot_simple.py
+/connection.py
+/bear_spread_strategy.py
+/volatility_scanner.py
+/option_chain_params.py
+/iv_smile_analysis.py
+/market_data_fetcher.py
+/scanner.ipynb
+/her.ipynb
+/scanner_params.xml
+/Dockerfile
+/docker-compose.yml
+/test_connection.py
+/get_chat_id.py
+/requirements.txt
+/.env.example
