@@ -612,9 +612,17 @@ if __name__ == '__main__':
     time.sleep(1)
 
     print("Subscribing to market data...")
+    BATCH_SIZE = 50  # Number of requests before pausing
+    BATCH_SLEEP = 1  # Seconds to sleep between batches
+
     for i, contract in enumerate(app.contracts):
         app.reqMktData(i, contract, "232", False, False, [])
         app.contract_details[i] = contract
+
+        # Sleep after every BATCH_SIZE requests to avoid overwhelming IB
+        if (i + 1) % BATCH_SIZE == 0:
+            print(f"  Subscribed to {i + 1}/{len(app.contracts)} contracts, pausing...")
+            time.sleep(BATCH_SLEEP)
 
     print(f"Subscribed to {len(app.contracts)} contracts")
     print("Starting Telegram bot...")
@@ -1050,8 +1058,17 @@ _Only alerts when spread < 5%_
 
     # Anomaly detection loop
     last_anom = dict()
+    start_time = datetime.datetime.now()
+    WARMUP_SECONDS = 60  # Don't send alerts during first minute while curves are building
+
     while True:
         time.sleep(30)
+
+        # Skip alerts during warmup period
+        elapsed = (datetime.datetime.now() - start_time).total_seconds()
+        if elapsed < WARMUP_SECONDS:
+            print(f"Warmup period: {int(WARMUP_SECONDS - elapsed)}s remaining, skipping anomaly alerts...")
+            continue
 
         for name, vols in app.volatilities.items():
             strks = list(sorted(list(vols.keys())))
