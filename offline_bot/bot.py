@@ -312,6 +312,10 @@ class IVSmileFetcher(EWrapper, EClient):
         if strike is None:
             return
 
+        # Debug: print first few ticks
+        if self.received_count < 5:
+            print(f"  IV tick: strike={strike}, field={field}, IV={impliedVolatility}, price={optPrice}, und={undPrice}")
+
         if impliedVolatility is not None and impliedVolatility > 0:
             if field == 10:  # BID
                 self.iv_data[strike]['bid_vol'] = impliedVolatility
@@ -324,7 +328,12 @@ class IVSmileFetcher(EWrapper, EClient):
                 self.iv_data[strike]['underlying_price'] = undPrice
                 self.received_count += 1
 
+        # Print progress every 20 ticks
+        if self.received_count > 0 and self.received_count % 20 == 0:
+            print(f"  Received {self.received_count}/{self.expected_count} IV ticks...")
+
         if self.received_count >= self.expected_count:
+            print(f"  All {self.received_count} IV ticks received!")
             self.done_event.set()
 
     def cancel_all_market_data(self):
@@ -361,8 +370,9 @@ def fetch_iv_smile(host, port, client_id, symbol, expiration, option_type, strik
     fetcher.reqMarketDataType(1)
     time.sleep(0.5)
 
-    # Request market data for each strike using SNAPSHOT mode (no subscription)
-    # Snapshot=True means IB sends data once and auto-cancels (no ticker limit issue)
+    # Request market data for each strike using STREAMING mode
+    # Since we paused main subscriptions, we have ticker slots available
+    print(f"Requesting IV data for {len(strikes)} strikes...")
     for i, strike in enumerate(strikes):
         contract = Contract()
         contract.symbol = symbol
@@ -375,19 +385,31 @@ def fetch_iv_smile(host, port, client_id, symbol, expiration, option_type, strik
 
         fetcher.reqId_to_strike[i] = strike
         fetcher.active_req_ids.append(i)
-        # Use snapshot=True to avoid holding ticker slots
-        fetcher.reqMktData(i, contract, "232", True, False, [])
+        # Use streaming mode (snapshot=False) - more reliable for options IV
+        fetcher.reqMktData(i, contract, "232", False, False, [])
 
         # Rate limiting - slower to avoid overwhelming IB
-        if (i + 1) % 15 == 0:
-            time.sleep(2.5)
+        if (i + 1) % 40 == 0:
+            print(f"  Requested {i + 1}/{len(strikes)} strikes, pausing...")
+            time.sleep(2)
         else:
-            time.sleep(0.1)  # Small delay between each request
+            time.sleep(0.05)  # Small delay between each request
+
+    print(f"All {len(strikes)} strike requests sent, waiting for data...")
 
     # Wait for data (max 45 seconds for larger strike ranges)
-    fetcher.done_event.wait(timeout=45)
+    got_data = fetcher.done_event.wait(timeout=45)
 
-    # Cancel any remaining subscriptions (in case snapshot didn't work)
+    if got_data:
+        print(f"Fetch completed! Received {fetcher.received_count} ticks")
+    else:
+        print(f"Fetch TIMEOUT! Only received {fetcher.received_count}/{fetcher.expected_count} ticks")
+
+    # Count how many strikes have valid data
+    valid_count = sum(1 for s in strikes if fetcher.iv_data[s]['bid_vol'] is not None or fetcher.iv_data[s]['ask_vol'] is not None)
+    print(f"Strikes with valid IV data: {valid_count}/{len(strikes)}")
+
+    # Cancel all subscriptions
     fetcher.cancel_all_market_data()
     time.sleep(1)
 
