@@ -290,12 +290,13 @@ class IVSmileFetcher(EWrapper, EClient):
         self.expected_count = len(strikes) * 2  # bid and ask for each strike
         self.done_event = threading.Event()
         self.reqId_to_strike = {}
+        self.active_req_ids = []  # Track active subscriptions for cleanup
 
     def error(self, reqId, errorCode, errorString, advancedOrderRejectJson=""):
         if errorCode not in [2104, 2106, 2158]:
             print(f"IVSmileFetcher Error {reqId} {errorCode}: {errorString}")
         # If we get an error for a contract, count it as received to avoid hanging
-        if errorCode in [200, 10091]:  # No security / subscription needed
+        if errorCode in [200, 10091, 101]:  # No security / subscription needed / max tickers
             self.received_count += 2  # Count both bid and ask as done
             if self.received_count >= self.expected_count:
                 self.done_event.set()
@@ -323,10 +324,19 @@ class IVSmileFetcher(EWrapper, EClient):
         if self.received_count >= self.expected_count:
             self.done_event.set()
 
+    def cancel_all_market_data(self):
+        """Cancel all active market data subscriptions"""
+        for req_id in self.active_req_ids:
+            try:
+                self.cancelMktData(req_id)
+            except:
+                pass
+        self.active_req_ids = []
+
 
 def fetch_iv_smile(host, port, client_id, symbol, expiration, option_type, strikes):
-    """Fetch fresh IV smile for a specific symbol/expiration"""
-    print(f"Fetching fresh IV smile for {symbol} {option_type} {expiration}...")
+    """Fetch fresh IV smile for a specific symbol/expiration using snapshot requests"""
+    print(f"Fetching fresh IV smile for {symbol} {option_type} {expiration} ({len(strikes)} strikes)...")
 
     fetcher = IVSmileFetcher(symbol, expiration, option_type, strikes)
     fetcher.connect(host, port, clientId=client_id)
@@ -339,7 +349,8 @@ def fetch_iv_smile(host, port, client_id, symbol, expiration, option_type, strik
     fetcher.reqMarketDataType(1)
     time.sleep(0.5)
 
-    # Request market data for each strike
+    # Request market data for each strike using SNAPSHOT mode (no subscription)
+    # Snapshot=True means IB sends data once and auto-cancels (no ticker limit issue)
     for i, strike in enumerate(strikes):
         contract = Contract()
         contract.symbol = symbol
@@ -351,14 +362,23 @@ def fetch_iv_smile(host, port, client_id, symbol, expiration, option_type, strik
         contract.right = option_type
 
         fetcher.reqId_to_strike[i] = strike
-        fetcher.reqMktData(i, contract, "232", False, False, [])
+        fetcher.active_req_ids.append(i)
+        # Use snapshot=True to avoid holding ticker slots
+        fetcher.reqMktData(i, contract, "232", True, False, [])
 
-        # Rate limiting
-        if (i + 1) % 40 == 0:
-            time.sleep(1)
+        # Rate limiting - slower to avoid overwhelming IB
+        if (i + 1) % 20 == 0:
+            time.sleep(1.5)
+        else:
+            time.sleep(0.05)  # Small delay between each request
 
-    # Wait for data (max 15 seconds)
-    fetcher.done_event.wait(timeout=15)
+    # Wait for data (max 20 seconds for larger strike ranges)
+    fetcher.done_event.wait(timeout=20)
+
+    # Cancel any remaining subscriptions (in case snapshot didn't work)
+    fetcher.cancel_all_market_data()
+    time.sleep(0.5)
+
     fetcher.disconnect()
     time.sleep(0.5)
 
