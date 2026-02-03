@@ -12,6 +12,12 @@ services:
       TWS_ACCEPT_INCOMING: "yes"
       READ_ONLY_API: "no"
       VNC_SERVER_PASSWORD: ${VNC_PASSWORD:-password}
+      # Trust all Docker network IPs for API connections
+      TWOFA_TIMEOUT_ACTION: restart
+      AUTO_RESTART_TIME: ""
+      RELOGIN_AFTER_2FA_TIMEOUT: "yes"
+      # Allow API connections from any IP (Docker network uses 172.x.x.x)
+      IBC_TrustedIPs: "172.0.0.0-172.255.255.255"
     ports:
       - "4001:4001"   # IB Gateway API (live)
       - "4002:4002"   # IB Gateway API (paper)
