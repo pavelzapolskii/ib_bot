@@ -683,86 +683,86 @@ if __name__ == '__main__':
         # Step 1: Fetch current prices for GLD and SLV
         prices = fetch_current_prices(IB_HOST, IB_PORT, IB_CLIENT_ID)
 
-    # Step 2: Build strike ranges based on current prices
-    build_strike_ranges(prices)
+        # Step 2: Build strike ranges based on current prices
+        build_strike_ranges(prices)
 
-    # Step 3: Build option contracts
-    build_contracts()
+        # Step 3: Build option contracts
+        build_contracts()
 
-    print(f"\nMonitoring {len(contracts)} option contracts")
-    print(f"Symbols: {symbols}")
-    for sym in symbols:
-        print(f"  {sym}: {len(strike_ranges[sym])} strikes x {len(expiration_dates[sym])} expirations")
-    print(f"\nConnecting to {IB_HOST}:{IB_PORT}...")
-
-    # Create app and connect (use different client ID to avoid conflict)
-    app = IBApp(contracts, strike_ranges)
-    app.connect(IB_HOST, IB_PORT, clientId=IB_CLIENT_ID + 1)
-
-    # Start API thread
-    api_thread = threading.Thread(target=app.run, daemon=True)
-    api_thread.start()
-
-    # Wait for connection to be ready
-    print("Waiting for connection...")
-    if not app.connected_event.wait(timeout=10):
-        print("ERROR: Connection timeout! Check TWS is running and API is enabled.")
-        exit(1)
-
-    print("Connection established!")
-    time.sleep(1)
-
-    # Request market data type:
-    # 1 = REALTIME (requires subscription)
-    # 3 = DELAYED (15-min delay, free)
-    # 4 = FROZEN (last available)
-    app.reqMarketDataType(1)  # FROZEN - last available data
-    time.sleep(1)
-
-    print("Subscribing to market data...")
-    BATCH_SIZE = 40  # Number of requests before pausing
-    BATCH_SLEEP = 2  # Seconds to sleep between batches
-
-    for i, contract in enumerate(app.contracts):
-        app.reqMktData(i, contract, "232", False, False, [])
-        app.contract_details[i] = contract
-
-        # Sleep after every BATCH_SIZE requests to avoid overwhelming IB
-        if (i + 1) % BATCH_SIZE == 0:
-            print(f"  Subscribed to {i + 1}/{len(app.contracts)} contracts, pausing...")
-            time.sleep(BATCH_SLEEP)
-
-    print(f"Subscribed to {len(app.contracts)} contracts")
-    print("Starting Telegram bot...")
-
-    # Telegram command handlers
-    @bot.message_handler(commands=['ivc'])
-    def send_underlying_menu_calls(message):
-        user_command_messages[message.chat.id] = message.text
-        # Show symbol selection first
-        markup = types.InlineKeyboardMarkup()
+        print(f"\nMonitoring {len(contracts)} option contracts")
+        print(f"Symbols: {symbols}")
         for sym in symbols:
-            markup.add(types.InlineKeyboardButton(sym, callback_data=f'SELECT_C_{sym}'))
-        bot.send_message(message.chat.id, "Select underlying (Calls):", reply_markup=markup)
+            print(f"  {sym}: {len(strike_ranges[sym])} strikes x {len(expiration_dates[sym])} expirations")
+        print(f"\nConnecting to {IB_HOST}:{IB_PORT}...")
 
-    @bot.message_handler(commands=['ivp'])
-    def send_underlying_menu_puts(message):
-        user_command_messages[message.chat.id] = message.text
-        # Show symbol selection first
-        markup = types.InlineKeyboardMarkup()
-        for sym in symbols:
-            markup.add(types.InlineKeyboardButton(sym, callback_data=f'SELECT_P_{sym}'))
-        bot.send_message(message.chat.id, "Select underlying (Puts):", reply_markup=markup)
+        # Create app and connect (use different client ID to avoid conflict)
+        app = IBApp(contracts, strike_ranges)
+        app.connect(IB_HOST, IB_PORT, clientId=IB_CLIENT_ID + 1)
 
-    @bot.message_handler(commands=['status'])
-    def send_status(message):
-        status_text = f"Bot is running!\nMonitoring: {', '.join(symbols)}\nContracts: {len(contracts)}"
-        bot.send_message(message.chat.id, status_text)
+        # Start API thread
+        api_thread = threading.Thread(target=app.run, daemon=True)
+        api_thread.start()
 
-    @bot.message_handler(commands=['menu', 'help', 'start'])
-    def send_menu(message):
-        """Show all available commands"""
-        menu_text = """📋 *IB Options Monitor Bot*
+        # Wait for connection to be ready
+        print("Waiting for connection...")
+        if not app.connected_event.wait(timeout=10):
+            print("ERROR: Connection timeout! Check TWS is running and API is enabled.")
+            exit(1)
+
+        print("Connection established!")
+        time.sleep(1)
+
+        # Request market data type:
+        # 1 = REALTIME (requires subscription)
+        # 3 = DELAYED (15-min delay, free)
+        # 4 = FROZEN (last available)
+        app.reqMarketDataType(1)  # FROZEN - last available data
+        time.sleep(1)
+
+        print("Subscribing to market data...")
+        BATCH_SIZE = 40  # Number of requests before pausing
+        BATCH_SLEEP = 2  # Seconds to sleep between batches
+
+        for i, contract in enumerate(app.contracts):
+            app.reqMktData(i, contract, "232", False, False, [])
+            app.contract_details[i] = contract
+
+            # Sleep after every BATCH_SIZE requests to avoid overwhelming IB
+            if (i + 1) % BATCH_SIZE == 0:
+                print(f"  Subscribed to {i + 1}/{len(app.contracts)} contracts, pausing...")
+                time.sleep(BATCH_SLEEP)
+
+        print(f"Subscribed to {len(app.contracts)} contracts")
+        print("Starting Telegram bot...")
+
+        # Telegram command handlers
+        @bot.message_handler(commands=['ivc'])
+        def send_underlying_menu_calls(message):
+            user_command_messages[message.chat.id] = message.text
+            # Show symbol selection first
+            markup = types.InlineKeyboardMarkup()
+            for sym in symbols:
+                markup.add(types.InlineKeyboardButton(sym, callback_data=f'SELECT_C_{sym}'))
+            bot.send_message(message.chat.id, "Select underlying (Calls):", reply_markup=markup)
+
+        @bot.message_handler(commands=['ivp'])
+        def send_underlying_menu_puts(message):
+            user_command_messages[message.chat.id] = message.text
+            # Show symbol selection first
+            markup = types.InlineKeyboardMarkup()
+            for sym in symbols:
+                markup.add(types.InlineKeyboardButton(sym, callback_data=f'SELECT_P_{sym}'))
+            bot.send_message(message.chat.id, "Select underlying (Puts):", reply_markup=markup)
+
+        @bot.message_handler(commands=['status'])
+        def send_status(message):
+            status_text = f"Bot is running!\nMonitoring: {', '.join(symbols)}\nContracts: {len(contracts)}"
+            bot.send_message(message.chat.id, status_text)
+
+        @bot.message_handler(commands=['menu', 'help', 'start'])
+        def send_menu(message):
+            """Show all available commands"""
+            menu_text = """📋 *IB Options Monitor Bot*
 _GLD/SLV/SPY ETF Options_
 
 *Commands:*
@@ -798,553 +798,553 @@ _Only alerts when spread < 5%_
 
 *Expirations:* Feb 20, Mar 20, Apr 17
 """
-        bot.send_message(message.chat.id, menu_text, parse_mode='Markdown')
+            bot.send_message(message.chat.id, menu_text, parse_mode='Markdown')
 
-    @bot.message_handler(commands=['calc'])
-    def send_calc_menu(message):
-        """Show asset selection for calculations"""
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🥇 GLD (Gold)", callback_data='CALC_ASSET_GLD'))
-        markup.add(types.InlineKeyboardButton("🥈 SLV (Silver)", callback_data='CALC_ASSET_SLV'))
-        markup.add(types.InlineKeyboardButton("📊 All Assets", callback_data='CALC_ASSET_ALL'))
-        bot.send_message(message.chat.id, "Select asset for calculation:", reply_markup=markup)
-
-    @bot.message_handler(commands=['atm'])
-    def send_atm_strikes(message):
-        """Show ATM (50 delta) strikes using forward price calculation (Option 2)"""
-        try:
-            # Fetch current prices (use different client_id to avoid conflict)
-            current_prices = fetch_current_prices(IB_HOST, IB_PORT, IB_CLIENT_ID + 100)
-
-            if not current_prices:
-                bot.send_message(message.chat.id, "Could not fetch current prices. Make sure TWS is connected.")
-                return
-
-            # Calculate ATM strikes using forward price
-            atm_data = get_atm_strikes_option2(current_prices)
-
-            response = "📊 *ATM Strikes (Forward Price)*\n"
-            response += f"_Rate: 4.5%_\n\n"
-
-            for symbol in symbols:
-                spot = current_prices.get(symbol)
-                if not spot:
-                    response += f"*{symbol}*: No price data\n\n"
-                    continue
-
-                response += f"*{symbol}* (Spot: ${spot:.2f})\n"
-
-                for exp in expiration_dates[symbol]:
-                    data = atm_data.get((symbol, exp))
-                    if data:
-                        # Format expiration nicely (20260220 -> Feb 20)
-                        exp_date = datetime.datetime.strptime(str(exp), '%Y%m%d')
-                        exp_str = exp_date.strftime('%b %d')
-
-                        response += f"  {exp_str}: ATM={data['atm_strike']} (Fwd=${data['forward']:.2f}, DTE={data['days']})\n"
-
-                response += "\n"
-
-            bot.send_message(message.chat.id, response, parse_mode='Markdown')
-
-        except Exception as e:
-            bot.send_message(message.chat.id, f"Error calculating ATM strikes: {str(e)}")
-
-    @bot.callback_query_handler(func=lambda call: True)
-    def handler(call):
-        bot.answer_callback_query(call.id)
-        argument = call.data
-
-        # Handle CALC asset selection
-        if argument.startswith('CALC_ASSET_'):
-            asset = argument.split('_')[2]  # GLD, SLV, or ALL
+        @bot.message_handler(commands=['calc'])
+        def send_calc_menu(message):
+            """Show asset selection for calculations"""
             markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton("📉 Best Put to Sell Vol", callback_data=f'CALCTYPE_{asset}_SELLPUT'))
-            markup.add(types.InlineKeyboardButton("📈 Best Call Insurance", callback_data=f'CALCTYPE_{asset}_BUYCALL'))
-            asset_name = "All Assets" if asset == "ALL" else asset
-            bot.send_message(call.message.chat.id, f"Select calculation for *{asset_name}*:", reply_markup=markup, parse_mode='Markdown')
-            return
+            markup.add(types.InlineKeyboardButton("🥇 GLD (Gold)", callback_data='CALC_ASSET_GLD'))
+            markup.add(types.InlineKeyboardButton("🥈 SLV (Silver)", callback_data='CALC_ASSET_SLV'))
+            markup.add(types.InlineKeyboardButton("📊 All Assets", callback_data='CALC_ASSET_ALL'))
+            bot.send_message(message.chat.id, "Select asset for calculation:", reply_markup=markup)
 
-        # Handle CALC type selection
-        if argument.startswith('CALCTYPE_'):
-            parts = argument.split('_')
-            asset_filter = parts[1]  # GLD, SLV, or ALL
-            calc_type = parts[2]  # SELLPUT or BUYCALL
-
-            if calc_type == 'SELLPUT':
-                # Best Put to Sell Vol: deep ITM puts (strike > forward), higher strike = better
-                asset_label = "All Assets" if asset_filter == "ALL" else asset_filter
-                msg = f"📉 *Best Puts to Sell Vol ({asset_label})*\n"
-                msg += "_Metric: (IV / Spread) × (1 + ITM%)_\n"
-                msg += "_Filter: Deep ITM puts, higher strike = better_\n\n"
-
-                results = []
-                for name, vols in app.volatilities.items():
-                    name_parts = name.split('_')
-                    symbol = name_parts[0]
-                    option_type = name_parts[1]
-                    expiration = name_parts[2]
-
-                    # Filter by asset if not ALL
-                    if asset_filter != 'ALL' and symbol != asset_filter:
-                        continue
-
-                    # Only process puts
-                    if option_type != 'P':
-                        continue
-
-                    dte = calculate_days_to_expiry(expiration)
-                    exp_date = datetime.datetime.strptime(str(expiration), '%Y%m%d')
-                    exp_str = exp_date.strftime('%b %d')
-
-                    # Calculate forward price for this expiration
-                    first_strike_data = next((d for d in vols.values() if d.get('underlying_price')), None)
-                    if not first_strike_data:
-                        continue
-                    spot = first_strike_data.get('underlying_price')
-                    forward = calculate_forward_price(spot, dte)
-
-                    for strike, data in vols.items():
-                        bid_vol = data.get('bid_vol')
-                        ask_vol = data.get('ask_vol')
-                        und_price = data.get('underlying_price')
-                        bid_price = data.get('bid_price')
-                        ask_price = data.get('ask_price')
-
-                        if bid_vol is None or ask_vol is None or und_price is None:
-                            continue
-
-                        # ITM put = strike > forward price
-                        if strike <= forward:
-                            continue
-
-                        spread = ask_vol - bid_vol
-                        mid_vol = (bid_vol + ask_vol) / 2
-                        spread_pct = spread / mid_vol if mid_vol > 0 else 999
-
-                        # Skip wide spreads (> 10%)
-                        if spread_pct > 0.10:
-                            continue
-
-                        # Distance from forward (ITM percentage) - higher strike = more ITM for puts
-                        itm_pct = (strike - forward) / forward * 100
-
-                        # Metric: (IV / spread) × (1 + ITM%/100)
-                        # Deeper ITM (higher strike) = higher bonus
-                        if spread > 0:
-                            base_metric = mid_vol / spread
-                            metric = base_metric * (1 + itm_pct / 100)
-                        else:
-                            metric = 0
-
-                        # Calculate time value annualized
-                        tv_ann_bid = None
-                        tv_ann_ask = None
-                        if bid_price and ask_price and dte > 0:
-                            intrinsic = calculate_intrinsic_value(strike, und_price, 'P')
-                            tv_ann_bid = calculate_time_value_annualized(bid_price, intrinsic, und_price, dte)
-                            tv_ann_ask = calculate_time_value_annualized(ask_price, intrinsic, und_price, dte)
-
-                        results.append({
-                            'symbol': symbol,
-                            'strike': strike,
-                            'expiration': exp_str,
-                            'expiration_raw': expiration,
-                            'dte': dte,
-                            'mid_vol': mid_vol,
-                            'spread': spread,
-                            'spread_pct': spread_pct,
-                            'metric': metric,
-                            'und_price': und_price,
-                            'forward': forward,
-                            'itm_pct': itm_pct,
-                            'bid_price': bid_price,
-                            'ask_price': ask_price,
-                            'tv_ann_bid': tv_ann_bid,
-                            'tv_ann_ask': tv_ann_ask
-                        })
-
-                # Sort by metric (highest first)
-                results.sort(key=lambda x: x['metric'], reverse=True)
-
-                # Show top 5
-                for i, r in enumerate(results[:5]):
-                    msg += f"*{i+1}. {r['symbol']} {r['strike']}P {r['expiration']}*\n"
-                    msg += f"   IV: {r['mid_vol']*100:.1f}% | Spread: {r['spread']*100:.1f}% ({r['spread_pct']*100:.0f}%)\n"
-                    if r['bid_price'] and r['ask_price']:
-                        msg += f"   Price: ${r['bid_price']:.2f} / ${r['ask_price']:.2f}\n"
-                    if r['tv_ann_bid'] is not None and r['tv_ann_ask'] is not None:
-                        msg += f"   TV(ann): {r['tv_ann_bid']:.1f}% / {r['tv_ann_ask']:.1f}%\n"
-                    msg += f"   ITM: {r['itm_pct']:.1f}% (Fwd=${r['forward']:.2f}) | DTE: {r['dte']} | Score: {r['metric']:.1f}\n\n"
-
-                if not results:
-                    msg += "_No valid ITM puts with tight spreads found_"
-
-                bot.send_message(call.message.chat.id, msg, parse_mode='Markdown')
-                return
-
-            elif calc_type == 'BUYCALL':
-                # Best Call Insurance: deep ITM calls (strike < forward), lower strike = better
-                asset_label = "All Assets" if asset_filter == "ALL" else asset_filter
-                msg = f"📈 *Best Calls for Insurance ({asset_label})*\n"
-                msg += "_Metric: (IV × Spread) / (1 + ITM%)_\n"
-                msg += "_Filter: Deep ITM calls, lower strike = better_\n\n"
-
-                results = []
-                for name, vols in app.volatilities.items():
-                    name_parts = name.split('_')
-                    symbol = name_parts[0]
-                    option_type = name_parts[1]
-                    expiration = name_parts[2]
-
-                    # Filter by asset if not ALL
-                    if asset_filter != 'ALL' and symbol != asset_filter:
-                        continue
-
-                    # Only process calls
-                    if option_type != 'C':
-                        continue
-
-                    dte = calculate_days_to_expiry(expiration)
-                    exp_date = datetime.datetime.strptime(str(expiration), '%Y%m%d')
-                    exp_str = exp_date.strftime('%b %d')
-
-                    # Calculate forward price for this expiration
-                    first_strike_data = next((d for d in vols.values() if d.get('underlying_price')), None)
-                    if not first_strike_data:
-                        continue
-                    spot = first_strike_data.get('underlying_price')
-                    forward = calculate_forward_price(spot, dte)
-
-                    for strike, data in vols.items():
-                        bid_vol = data.get('bid_vol')
-                        ask_vol = data.get('ask_vol')
-                        und_price = data.get('underlying_price')
-                        bid_price = data.get('bid_price')
-                        ask_price = data.get('ask_price')
-
-                        if bid_vol is None or ask_vol is None or und_price is None:
-                            continue
-
-                        # ITM call = strike < forward price
-                        if strike >= forward:
-                            continue
-
-                        spread = ask_vol - bid_vol
-                        mid_vol = (bid_vol + ask_vol) / 2
-                        spread_pct = spread / mid_vol if mid_vol > 0 else 999
-
-                        # Skip wide spreads (> 10%)
-                        if spread_pct > 0.10:
-                            continue
-
-                        # Distance from forward (ITM percentage) - lower strike = more ITM for calls
-                        itm_pct = (forward - strike) / forward * 100
-
-                        # Metric: (IV × spread) / (1 + ITM%/100)
-                        # Deeper ITM (lower strike) = lower metric (better - cheaper insurance)
-                        base_metric = mid_vol * spread
-                        metric = base_metric / (1 + itm_pct / 100)
-
-                        # Calculate time value annualized
-                        tv_ann_bid = None
-                        tv_ann_ask = None
-                        if bid_price and ask_price and dte > 0:
-                            intrinsic = calculate_intrinsic_value(strike, und_price, 'C')
-                            tv_ann_bid = calculate_time_value_annualized(bid_price, intrinsic, und_price, dte)
-                            tv_ann_ask = calculate_time_value_annualized(ask_price, intrinsic, und_price, dte)
-
-                        results.append({
-                            'symbol': symbol,
-                            'strike': strike,
-                            'expiration': exp_str,
-                            'expiration_raw': expiration,
-                            'dte': dte,
-                            'mid_vol': mid_vol,
-                            'spread': spread,
-                            'spread_pct': spread_pct,
-                            'metric': metric,
-                            'und_price': und_price,
-                            'forward': forward,
-                            'itm_pct': itm_pct,
-                            'bid_price': bid_price,
-                            'ask_price': ask_price,
-                            'tv_ann_bid': tv_ann_bid,
-                            'tv_ann_ask': tv_ann_ask
-                        })
-
-                # Sort by metric (lowest first)
-                results.sort(key=lambda x: x['metric'])
-
-                # Show top 5
-                for i, r in enumerate(results[:5]):
-                    msg += f"*{i+1}. {r['symbol']} {r['strike']}C {r['expiration']}*\n"
-                    msg += f"   IV: {r['mid_vol']*100:.1f}% | Spread: {r['spread']*100:.1f}% ({r['spread_pct']*100:.0f}%)\n"
-                    if r['bid_price'] and r['ask_price']:
-                        msg += f"   Price: ${r['bid_price']:.2f} / ${r['ask_price']:.2f}\n"
-                    if r['tv_ann_bid'] is not None and r['tv_ann_ask'] is not None:
-                        msg += f"   TV(ann): {r['tv_ann_bid']:.1f}% / {r['tv_ann_ask']:.1f}%\n"
-                    msg += f"   ITM: {r['itm_pct']:.1f}% (Fwd=${r['forward']:.2f}) | DTE: {r['dte']} | Score: {r['metric']*10000:.2f}\n\n"
-
-                if not results:
-                    msg += "_No valid ITM calls with tight spreads found_"
-
-                bot.send_message(call.message.chat.id, msg, parse_mode='Markdown')
-                return
-
-        # Handle symbol selection (SELECT_C_GC or SELECT_P_SI)
-        if argument.startswith('SELECT_'):
-            parts = argument.split('_')
-            option_type = parts[1]  # C or P
-            symbol = parts[2]       # GC, SI, HG, PA
-
-            markup = types.InlineKeyboardMarkup()
-            for exp in expiration_dates[symbol]:
-                markup.add(types.InlineKeyboardButton(str(exp), callback_data=f'{symbol}_{option_type}_{exp}'))
-            type_name = "Calls" if option_type == 'C' else "Puts"
-            bot.send_message(call.message.chat.id, f"Select expiration ({symbol} {type_name}):", reply_markup=markup)
-            return
-
-        # Handle expiration selection (GLD_C_20260220)
-        # Parse the argument to get symbol, option_type, expiration
-        parts = argument.split('_')
-        if len(parts) != 3:
-            bot.send_message(call.message.chat.id, "Invalid selection format.")
-            return
-
-        symbol = parts[0]
-        option_type = parts[1]
-        expiration = parts[2]
-
-        # Check for historical data request (hour=N parameter)
-        command_text = user_command_messages.get(call.message.chat.id, "")
-        match = re.search(r'hour=(\d+)', command_text)
-        hour = int(match.group(1)) if match else 0
-
-        if hour > 0:
-            # Historical data from database
-            historical_data = last_hours_smile(option_type, symbol, expiration, hour)
-            strks = list(strike_ranges[symbol])
-            bidvol = np.array([historical_data.get(s, {}).get('bid_vol') for s in strks])
-            askvol = np.array([historical_data.get(s, {}).get('ask_vol') for s in strks])
-            title_suffix = f" ({hour}h ago)"
-        else:
-            # Fetch fresh data from IB
-            if symbol not in strike_ranges:
-                bot.send_message(call.message.chat.id, f"No strike range defined for {symbol}.")
-                return
-
-            strikes = list(strike_ranges[symbol])
-
-            # Send "fetching" message
-            bot.send_message(call.message.chat.id, f"🔄 Fetching fresh IV data for {symbol} {option_type} {expiration}...")
-
+        @bot.message_handler(commands=['atm'])
+        def send_atm_strikes(message):
+            """Show ATM (50 delta) strikes using forward price calculation (Option 2)"""
             try:
-                # Fetch fresh IV data using a separate IB connection
-                iv_data = fetch_iv_smile(IB_HOST, IB_PORT, IB_CLIENT_ID + 200, symbol, expiration, option_type, strikes)
+                # Fetch current prices (use different client_id to avoid conflict)
+                current_prices = fetch_current_prices(IB_HOST, IB_PORT, IB_CLIENT_ID + 100)
 
-                # Update the main app's volatilities with fresh data
-                symbol_key = f"{symbol}_{option_type}_{expiration}"
-                if symbol_key in app.volatilities:
-                    for strike, data in iv_data.items():
-                        if strike in app.volatilities[symbol_key]:
-                            if data['bid_vol'] is not None:
-                                app.volatilities[symbol_key][strike]['bid_vol'] = data['bid_vol']
-                                app.volatilities[symbol_key][strike]['bid_price'] = data['bid_price']
-                            if data['ask_vol'] is not None:
-                                app.volatilities[symbol_key][strike]['ask_vol'] = data['ask_vol']
-                                app.volatilities[symbol_key][strike]['ask_price'] = data['ask_price']
-                            if data['underlying_price'] is not None:
-                                app.volatilities[symbol_key][strike]['underlying_price'] = data['underlying_price']
+                if not current_prices:
+                    bot.send_message(message.chat.id, "Could not fetch current prices. Make sure TWS is connected.")
+                    return
 
-                # Extract data for plotting
-                strks = strikes
-                bidvol = np.array([iv_data[s]['bid_vol'] for s in strks])
-                askvol = np.array([iv_data[s]['ask_vol'] for s in strks])
-                title_suffix = " (Fresh)"
+                # Calculate ATM strikes using forward price
+                atm_data = get_atm_strikes_option2(current_prices)
+
+                response = "📊 *ATM Strikes (Forward Price)*\n"
+                response += f"_Rate: 4.5%_\n\n"
+
+                for symbol in symbols:
+                    spot = current_prices.get(symbol)
+                    if not spot:
+                        response += f"*{symbol}*: No price data\n\n"
+                        continue
+
+                    response += f"*{symbol}* (Spot: ${spot:.2f})\n"
+
+                    for exp in expiration_dates[symbol]:
+                        data = atm_data.get((symbol, exp))
+                        if data:
+                            # Format expiration nicely (20260220 -> Feb 20)
+                            exp_date = datetime.datetime.strptime(str(exp), '%Y%m%d')
+                            exp_str = exp_date.strftime('%b %d')
+
+                            response += f"  {exp_str}: ATM={data['atm_strike']} (Fwd=${data['forward']:.2f}, DTE={data['days']})\n"
+
+                    response += "\n"
+
+                bot.send_message(message.chat.id, response, parse_mode='Markdown')
 
             except Exception as e:
-                bot.send_message(call.message.chat.id, f"Error fetching data: {str(e)}")
+                bot.send_message(message.chat.id, f"Error calculating ATM strikes: {str(e)}")
+
+        @bot.callback_query_handler(func=lambda call: True)
+        def handler(call):
+            bot.answer_callback_query(call.id)
+            argument = call.data
+
+            # Handle CALC asset selection
+            if argument.startswith('CALC_ASSET_'):
+                asset = argument.split('_')[2]  # GLD, SLV, or ALL
+                markup = types.InlineKeyboardMarkup()
+                markup.add(types.InlineKeyboardButton("📉 Best Put to Sell Vol", callback_data=f'CALCTYPE_{asset}_SELLPUT'))
+                markup.add(types.InlineKeyboardButton("📈 Best Call Insurance", callback_data=f'CALCTYPE_{asset}_BUYCALL'))
+                asset_name = "All Assets" if asset == "ALL" else asset
+                bot.send_message(call.message.chat.id, f"Select calculation for *{asset_name}*:", reply_markup=markup, parse_mode='Markdown')
                 return
 
-        # Filter out None values
-        valid_bids = [v for v in bidvol if v is not None]
-        valid_asks = [v for v in askvol if v is not None]
+            # Handle CALC type selection
+            if argument.startswith('CALCTYPE_'):
+                parts = argument.split('_')
+                asset_filter = parts[1]  # GLD, SLV, or ALL
+                calc_type = parts[2]  # SELLPUT or BUYCALL
 
-        all_valid = valid_bids + valid_asks
-        if not all_valid:
-            bot.send_message(call.message.chat.id, "No IV data received. Market may be closed or no quotes available.")
-            return
+                if calc_type == 'SELLPUT':
+                    # Best Put to Sell Vol: deep ITM puts (strike > forward), higher strike = better
+                    asset_label = "All Assets" if asset_filter == "ALL" else asset_filter
+                    msg = f"📉 *Best Puts to Sell Vol ({asset_label})*\n"
+                    msg += "_Metric: (IV / Spread) × (1 + ITM%)_\n"
+                    msg += "_Filter: Deep ITM puts, higher strike = better_\n\n"
 
-        min_value = round_down_to_closest_10(min(all_valid))
-        max_value = round_up_to_closest_10(max(all_valid))
+                    results = []
+                    for name, vols in app.volatilities.items():
+                        name_parts = name.split('_')
+                        symbol = name_parts[0]
+                        option_type = name_parts[1]
+                        expiration = name_parts[2]
 
-        plt.switch_backend('Agg')
-        plt.figure(figsize=(10, 6))
-        plt.cla()
-        plt.scatter(strks, bidvol, label='Bid IV', marker='o')
-        plt.scatter(strks, askvol, label='Ask IV', marker='x')
-        plt.grid(True)
-        plt.legend()
-        plt.xlabel('Strike')
-        plt.ylabel('Implied Volatility')
-        plt.ylim([min_value, max_value])
-        plt.title(f'IV Smile: {argument}{title_suffix}')
-        plt.savefig('vol.png', dpi=100, bbox_inches='tight')
-        plt.close()
+                        # Filter by asset if not ALL
+                        if asset_filter != 'ALL' and symbol != asset_filter:
+                            continue
 
-        # Count how many data points we got
-        bid_count = sum(1 for v in bidvol if v is not None)
-        ask_count = sum(1 for v in askvol if v is not None)
+                        # Only process puts
+                        if option_type != 'P':
+                            continue
 
-        bot.send_photo(call.message.chat.id, open('vol.png', 'rb'), caption=f"✅ Data: {bid_count} bids, {ask_count} asks")
+                        dte = calculate_days_to_expiry(expiration)
+                        exp_date = datetime.datetime.strptime(str(expiration), '%Y%m%d')
+                        exp_str = exp_date.strftime('%b %d')
 
-    # Start Telegram polling in separate thread
-    polling_thread = threading.Thread(target=bot.polling, daemon=True)
-    polling_thread.start()
+                        # Calculate forward price for this expiration
+                        first_strike_data = next((d for d in vols.values() if d.get('underlying_price')), None)
+                        if not first_strike_data:
+                            continue
+                        spot = first_strike_data.get('underlying_price')
+                        forward = calculate_forward_price(spot, dte)
 
-    print("Bot is running! Use /ivc, /ivp, /status in Telegram")
-    print("Press Ctrl+C to stop")
+                        for strike, data in vols.items():
+                            bid_vol = data.get('bid_vol')
+                            ask_vol = data.get('ask_vol')
+                            und_price = data.get('underlying_price')
+                            bid_price = data.get('bid_price')
+                            ask_price = data.get('ask_price')
 
-    # Anomaly detection loop
-    last_anom = dict()
-    start_time = datetime.datetime.now()
-    WARMUP_SECONDS = 90  # Don't send alerts during first 90 seconds while curves are building
+                            if bid_vol is None or ask_vol is None or und_price is None:
+                                continue
 
-    while True:
-        time.sleep(30)
+                            # ITM put = strike > forward price
+                            if strike <= forward:
+                                continue
 
-        # Skip alerts during warmup period
-        elapsed = (datetime.datetime.now() - start_time).total_seconds()
-        if elapsed < WARMUP_SECONDS:
-            print(f"Warmup period: {int(WARMUP_SECONDS - elapsed)}s remaining, skipping anomaly alerts...")
-            continue
+                            spread = ask_vol - bid_vol
+                            mid_vol = (bid_vol + ask_vol) / 2
+                            spread_pct = spread / mid_vol if mid_vol > 0 else 999
 
-        for name, vols in app.volatilities.items():
-            strks = list(sorted(list(vols.keys())))
-            mid_vols = []
-            real_strks = []
-            vol_data = []  # Store full data for anomaly reporting
+                            # Skip wide spreads (> 10%)
+                            if spread_pct > 0.10:
+                                continue
 
-            for strk in strks:
-                if vols[strk]['bid_vol'] is None or vols[strk]['ask_vol'] is None:
-                    continue
-                mid_vol = (vols[strk]['bid_vol'] + vols[strk]['ask_vol']) / 2
-                mid_vols.append(mid_vol)
-                real_strks.append(strk)
-                vol_data.append({
-                    'strike': strk,
-                    'bid_vol': vols[strk]['bid_vol'],
-                    'ask_vol': vols[strk]['ask_vol'],
-                    'mid_vol': mid_vol,
-                    'bid_price': vols[strk].get('bid_price'),
-                    'ask_price': vols[strk].get('ask_price'),
-                    'underlying_price': vols[strk].get('underlying_price')
-                })
+                            # Distance from forward (ITM percentage) - higher strike = more ITM for puts
+                            itm_pct = (strike - forward) / forward * 100
 
-            # Use spread-aware anomaly detection
-            anomalies = find_anomalies_spread_aware(vol_data)
+                            # Metric: (IV / spread) × (1 + ITM%/100)
+                            # Deeper ITM (higher strike) = higher bonus
+                            if spread > 0:
+                                base_metric = mid_vol / spread
+                                metric = base_metric * (1 + itm_pct / 100)
+                            else:
+                                metric = 0
 
-            if anomalies:
-                if name not in last_anom or seconds_to_now(last_anom[name]) > 60 * 30:
-                    # Parse name to get option type and expiration
-                    parts = name.split('_')
-                    symbol = parts[0]
-                    option_type = parts[1]
-                    expiration = parts[2]
+                            # Calculate time value annualized
+                            tv_ann_bid = None
+                            tv_ann_ask = None
+                            if bid_price and ask_price and dte > 0:
+                                intrinsic = calculate_intrinsic_value(strike, und_price, 'P')
+                                tv_ann_bid = calculate_time_value_annualized(bid_price, intrinsic, und_price, dte)
+                                tv_ann_ask = calculate_time_value_annualized(ask_price, intrinsic, und_price, dte)
 
-                    # Calculate DTE
-                    dte = calculate_days_to_expiry(expiration)
+                            results.append({
+                                'symbol': symbol,
+                                'strike': strike,
+                                'expiration': exp_str,
+                                'expiration_raw': expiration,
+                                'dte': dte,
+                                'mid_vol': mid_vol,
+                                'spread': spread,
+                                'spread_pct': spread_pct,
+                                'metric': metric,
+                                'und_price': und_price,
+                                'forward': forward,
+                                'itm_pct': itm_pct,
+                                'bid_price': bid_price,
+                                'ask_price': ask_price,
+                                'tv_ann_bid': tv_ann_bid,
+                                'tv_ann_ask': tv_ann_ask
+                            })
 
-                    # Separate strong (arbitrage) from normal anomalies
-                    strong_anomalies = [(i, r, s) for i, r, s in anomalies if s == 'STRONG']
-                    normal_anomalies = [(i, r, s) for i, r, s in anomalies if s == 'NORMAL']
+                    # Sort by metric (highest first)
+                    results.sort(key=lambda x: x['metric'], reverse=True)
 
-                    # Create plot with highlighted anomalies
-                    plt.figure(figsize=(12, 7))
-                    plt.scatter(real_strks, mid_vols, label='Mid IV', color='blue', alpha=0.6)
+                    # Show top 5
+                    for i, r in enumerate(results[:5]):
+                        msg += f"*{i+1}. {r['symbol']} {r['strike']}P {r['expiration']}*\n"
+                        msg += f"   IV: {r['mid_vol']*100:.1f}% | Spread: {r['spread']*100:.1f}% ({r['spread_pct']*100:.0f}%)\n"
+                        if r['bid_price'] and r['ask_price']:
+                            msg += f"   Price: ${r['bid_price']:.2f} / ${r['ask_price']:.2f}\n"
+                        if r['tv_ann_bid'] is not None and r['tv_ann_ask'] is not None:
+                            msg += f"   TV(ann): {r['tv_ann_bid']:.1f}% / {r['tv_ann_ask']:.1f}%\n"
+                        msg += f"   ITM: {r['itm_pct']:.1f}% (Fwd=${r['forward']:.2f}) | DTE: {r['dte']} | Score: {r['metric']:.1f}\n\n"
 
-                    # Highlight normal anomaly points (yellow X)
-                    if normal_anomalies:
-                        normal_strks = [real_strks[idx] for idx, _, _ in normal_anomalies]
-                        normal_vols = [mid_vols[idx] for idx, _, _ in normal_anomalies]
-                        plt.scatter(normal_strks, normal_vols, color='orange', s=150, marker='X', label='Shape Anomaly', zorder=5)
+                    if not results:
+                        msg += "_No valid ITM puts with tight spreads found_"
 
-                    # Highlight strong anomaly points (red star)
-                    if strong_anomalies:
-                        strong_strks = [real_strks[idx] for idx, _, _ in strong_anomalies]
-                        strong_vols = [mid_vols[idx] for idx, _, _ in strong_anomalies]
-                        plt.scatter(strong_strks, strong_vols, color='red', s=200, marker='*', label='ARBITRAGE', zorder=6)
+                    bot.send_message(call.message.chat.id, msg, parse_mode='Markdown')
+                    return
 
-                    # Add annotations for all anomalies
-                    for idx, reason, strength in anomalies:
-                        color = 'red' if strength == 'STRONG' else 'orange'
-                        plt.annotate(f'K={real_strks[idx]}',
-                                   (real_strks[idx], mid_vols[idx]),
-                                   textcoords="offset points", xytext=(0,10),
-                                   ha='center', fontsize=9, color=color, fontweight='bold' if strength == 'STRONG' else 'normal')
+                elif calc_type == 'BUYCALL':
+                    # Best Call Insurance: deep ITM calls (strike < forward), lower strike = better
+                    asset_label = "All Assets" if asset_filter == "ALL" else asset_filter
+                    msg = f"📈 *Best Calls for Insurance ({asset_label})*\n"
+                    msg += "_Metric: (IV × Spread) / (1 + ITM%)_\n"
+                    msg += "_Filter: Deep ITM calls, lower strike = better_\n\n"
 
-                    plt.grid(True)
-                    plt.legend()
-                    plt.xlabel('Strike')
-                    plt.ylabel('Mid IV')
-                    plt.ylim([round_down_to_closest_10(min(mid_vols)), round_up_to_closest_10(max(mid_vols))])
+                    results = []
+                    for name, vols in app.volatilities.items():
+                        name_parts = name.split('_')
+                        symbol = name_parts[0]
+                        option_type = name_parts[1]
+                        expiration = name_parts[2]
 
-                    # Title indicates if there's arbitrage
-                    if strong_anomalies:
-                        plt.title(f'⚠️ ARBITRAGE in {name} (DTE={dte})')
-                    else:
-                        plt.title(f'Anomaly in {name} (DTE={dte})')
-                    plt.savefig('vol.png', dpi=100, bbox_inches='tight')
-                    plt.close()
+                        # Filter by asset if not ALL
+                        if asset_filter != 'ALL' and symbol != asset_filter:
+                            continue
 
-                    # Build detailed message
-                    if strong_anomalies:
-                        msg = f"🔥 *ARBITRAGE detected in {name}*\n"
-                    else:
-                        msg = f"🚨 *Anomaly detected in {name}*\n"
-                    msg += f"_DTE: {dte} days_\n\n"
+                        # Only process calls
+                        if option_type != 'C':
+                            continue
 
-                    for idx, reason, strength in anomalies:
-                        data = vol_data[idx]
-                        strk = data['strike']
-                        bid_vol = data['bid_vol']
-                        ask_vol = data['ask_vol']
-                        bid_price = data['bid_price']
-                        ask_price = data['ask_price']
-                        und_price = data['underlying_price']
+                        dte = calculate_days_to_expiry(expiration)
+                        exp_date = datetime.datetime.strptime(str(expiration), '%Y%m%d')
+                        exp_str = exp_date.strftime('%b %d')
 
-                        # Calculate spread
-                        iv_spread = (ask_vol - bid_vol) * 100
-                        iv_spread_pct = (ask_vol - bid_vol) / ((bid_vol + ask_vol) / 2) * 100
+                        # Calculate forward price for this expiration
+                        first_strike_data = next((d for d in vols.values() if d.get('underlying_price')), None)
+                        if not first_strike_data:
+                            continue
+                        spot = first_strike_data.get('underlying_price')
+                        forward = calculate_forward_price(spot, dte)
 
-                        prefix = "🔥" if strength == 'STRONG' else "⚠️"
-                        msg += f"{prefix} *Strike {strk}:* {reason}\n"
-                        msg += f"  IV: Bid={bid_vol*100:.1f}% / Ask={ask_vol*100:.1f}% (spread={iv_spread:.1f}%, {iv_spread_pct:.1f}%)\n"
+                        for strike, data in vols.items():
+                            bid_vol = data.get('bid_vol')
+                            ask_vol = data.get('ask_vol')
+                            und_price = data.get('underlying_price')
+                            bid_price = data.get('bid_price')
+                            ask_price = data.get('ask_price')
 
-                        # Calculate time value if we have prices
-                        if bid_price and ask_price and und_price and dte > 0:
-                            intrinsic = calculate_intrinsic_value(strk, und_price, option_type)
-                            bid_tv = bid_price - intrinsic
-                            ask_tv = ask_price - intrinsic
-                            bid_tv_ann = calculate_time_value_annualized(bid_price, intrinsic, und_price, dte)
-                            ask_tv_ann = calculate_time_value_annualized(ask_price, intrinsic, und_price, dte)
-                            price_spread = ask_price - bid_price
-                            msg += f"  Underlying: ${und_price:.2f}\n"
-                            msg += f"  Price: Bid=${bid_price:.2f} / Ask=${ask_price:.2f} (spread=${price_spread:.2f})\n"
-                            msg += f"  Intrinsic: ${intrinsic:.2f}\n"
-                            msg += f"  Time Value: Bid=${bid_tv:.2f} / Ask=${ask_tv:.2f}\n"
-                            msg += f"  Time Value (ann): Bid={bid_tv_ann:.1f}% / Ask={ask_tv_ann:.1f}%\n"
-                        msg += "\n"
+                            if bid_vol is None or ask_vol is None or und_price is None:
+                                continue
 
-                    bot.send_photo(chat_id, open('vol.png', 'rb'))
-                    bot.send_message(chat_id, msg, parse_mode='Markdown')
+                            # ITM call = strike < forward price
+                            if strike >= forward:
+                                continue
 
-                    # Send full IV smile plot after anomaly message
-                    if generate_iv_smile_plot(app, name, 'iv_smile.png'):
-                        bot.send_photo(chat_id, open('iv_smile.png', 'rb'), caption=f"IV Smile: {name}")
+                            spread = ask_vol - bid_vol
+                            mid_vol = (bid_vol + ask_vol) / 2
+                            spread_pct = spread / mid_vol if mid_vol > 0 else 999
 
-                    last_anom[name] = datetime.datetime.now()
+                            # Skip wide spreads (> 10%)
+                            if spread_pct > 0.10:
+                                continue
+
+                            # Distance from forward (ITM percentage) - lower strike = more ITM for calls
+                            itm_pct = (forward - strike) / forward * 100
+
+                            # Metric: (IV × spread) / (1 + ITM%/100)
+                            # Deeper ITM (lower strike) = lower metric (better - cheaper insurance)
+                            base_metric = mid_vol * spread
+                            metric = base_metric / (1 + itm_pct / 100)
+
+                            # Calculate time value annualized
+                            tv_ann_bid = None
+                            tv_ann_ask = None
+                            if bid_price and ask_price and dte > 0:
+                                intrinsic = calculate_intrinsic_value(strike, und_price, 'C')
+                                tv_ann_bid = calculate_time_value_annualized(bid_price, intrinsic, und_price, dte)
+                                tv_ann_ask = calculate_time_value_annualized(ask_price, intrinsic, und_price, dte)
+
+                            results.append({
+                                'symbol': symbol,
+                                'strike': strike,
+                                'expiration': exp_str,
+                                'expiration_raw': expiration,
+                                'dte': dte,
+                                'mid_vol': mid_vol,
+                                'spread': spread,
+                                'spread_pct': spread_pct,
+                                'metric': metric,
+                                'und_price': und_price,
+                                'forward': forward,
+                                'itm_pct': itm_pct,
+                                'bid_price': bid_price,
+                                'ask_price': ask_price,
+                                'tv_ann_bid': tv_ann_bid,
+                                'tv_ann_ask': tv_ann_ask
+                            })
+
+                    # Sort by metric (lowest first)
+                    results.sort(key=lambda x: x['metric'])
+
+                    # Show top 5
+                    for i, r in enumerate(results[:5]):
+                        msg += f"*{i+1}. {r['symbol']} {r['strike']}C {r['expiration']}*\n"
+                        msg += f"   IV: {r['mid_vol']*100:.1f}% | Spread: {r['spread']*100:.1f}% ({r['spread_pct']*100:.0f}%)\n"
+                        if r['bid_price'] and r['ask_price']:
+                            msg += f"   Price: ${r['bid_price']:.2f} / ${r['ask_price']:.2f}\n"
+                        if r['tv_ann_bid'] is not None and r['tv_ann_ask'] is not None:
+                            msg += f"   TV(ann): {r['tv_ann_bid']:.1f}% / {r['tv_ann_ask']:.1f}%\n"
+                        msg += f"   ITM: {r['itm_pct']:.1f}% (Fwd=${r['forward']:.2f}) | DTE: {r['dte']} | Score: {r['metric']*10000:.2f}\n\n"
+
+                    if not results:
+                        msg += "_No valid ITM calls with tight spreads found_"
+
+                    bot.send_message(call.message.chat.id, msg, parse_mode='Markdown')
+                    return
+
+            # Handle symbol selection (SELECT_C_GC or SELECT_P_SI)
+            if argument.startswith('SELECT_'):
+                parts = argument.split('_')
+                option_type = parts[1]  # C or P
+                symbol = parts[2]       # GC, SI, HG, PA
+
+                markup = types.InlineKeyboardMarkup()
+                for exp in expiration_dates[symbol]:
+                    markup.add(types.InlineKeyboardButton(str(exp), callback_data=f'{symbol}_{option_type}_{exp}'))
+                type_name = "Calls" if option_type == 'C' else "Puts"
+                bot.send_message(call.message.chat.id, f"Select expiration ({symbol} {type_name}):", reply_markup=markup)
+                return
+
+            # Handle expiration selection (GLD_C_20260220)
+            # Parse the argument to get symbol, option_type, expiration
+            parts = argument.split('_')
+            if len(parts) != 3:
+                bot.send_message(call.message.chat.id, "Invalid selection format.")
+                return
+
+            symbol = parts[0]
+            option_type = parts[1]
+            expiration = parts[2]
+
+            # Check for historical data request (hour=N parameter)
+            command_text = user_command_messages.get(call.message.chat.id, "")
+            match = re.search(r'hour=(\d+)', command_text)
+            hour = int(match.group(1)) if match else 0
+
+            if hour > 0:
+                # Historical data from database
+                historical_data = last_hours_smile(option_type, symbol, expiration, hour)
+                strks = list(strike_ranges[symbol])
+                bidvol = np.array([historical_data.get(s, {}).get('bid_vol') for s in strks])
+                askvol = np.array([historical_data.get(s, {}).get('ask_vol') for s in strks])
+                title_suffix = f" ({hour}h ago)"
+            else:
+                # Fetch fresh data from IB
+                if symbol not in strike_ranges:
+                    bot.send_message(call.message.chat.id, f"No strike range defined for {symbol}.")
+                    return
+
+                strikes = list(strike_ranges[symbol])
+
+                # Send "fetching" message
+                bot.send_message(call.message.chat.id, f"🔄 Fetching fresh IV data for {symbol} {option_type} {expiration}...")
+
+                try:
+                    # Fetch fresh IV data using a separate IB connection
+                    iv_data = fetch_iv_smile(IB_HOST, IB_PORT, IB_CLIENT_ID + 200, symbol, expiration, option_type, strikes)
+
+                    # Update the main app's volatilities with fresh data
+                    symbol_key = f"{symbol}_{option_type}_{expiration}"
+                    if symbol_key in app.volatilities:
+                        for strike, data in iv_data.items():
+                            if strike in app.volatilities[symbol_key]:
+                                if data['bid_vol'] is not None:
+                                    app.volatilities[symbol_key][strike]['bid_vol'] = data['bid_vol']
+                                    app.volatilities[symbol_key][strike]['bid_price'] = data['bid_price']
+                                if data['ask_vol'] is not None:
+                                    app.volatilities[symbol_key][strike]['ask_vol'] = data['ask_vol']
+                                    app.volatilities[symbol_key][strike]['ask_price'] = data['ask_price']
+                                if data['underlying_price'] is not None:
+                                    app.volatilities[symbol_key][strike]['underlying_price'] = data['underlying_price']
+
+                    # Extract data for plotting
+                    strks = strikes
+                    bidvol = np.array([iv_data[s]['bid_vol'] for s in strks])
+                    askvol = np.array([iv_data[s]['ask_vol'] for s in strks])
+                    title_suffix = " (Fresh)"
+
+                except Exception as e:
+                    bot.send_message(call.message.chat.id, f"Error fetching data: {str(e)}")
+                    return
+
+            # Filter out None values
+            valid_bids = [v for v in bidvol if v is not None]
+            valid_asks = [v for v in askvol if v is not None]
+
+            all_valid = valid_bids + valid_asks
+            if not all_valid:
+                bot.send_message(call.message.chat.id, "No IV data received. Market may be closed or no quotes available.")
+                return
+
+            min_value = round_down_to_closest_10(min(all_valid))
+            max_value = round_up_to_closest_10(max(all_valid))
+
+            plt.switch_backend('Agg')
+            plt.figure(figsize=(10, 6))
+            plt.cla()
+            plt.scatter(strks, bidvol, label='Bid IV', marker='o')
+            plt.scatter(strks, askvol, label='Ask IV', marker='x')
+            plt.grid(True)
+            plt.legend()
+            plt.xlabel('Strike')
+            plt.ylabel('Implied Volatility')
+            plt.ylim([min_value, max_value])
+            plt.title(f'IV Smile: {argument}{title_suffix}')
+            plt.savefig('vol.png', dpi=100, bbox_inches='tight')
+            plt.close()
+
+            # Count how many data points we got
+            bid_count = sum(1 for v in bidvol if v is not None)
+            ask_count = sum(1 for v in askvol if v is not None)
+
+            bot.send_photo(call.message.chat.id, open('vol.png', 'rb'), caption=f"✅ Data: {bid_count} bids, {ask_count} asks")
+
+        # Start Telegram polling in separate thread
+        polling_thread = threading.Thread(target=bot.polling, daemon=True)
+        polling_thread.start()
+
+        print("Bot is running! Use /ivc, /ivp, /status in Telegram")
+        print("Press Ctrl+C to stop")
+
+        # Anomaly detection loop
+        last_anom = dict()
+        start_time = datetime.datetime.now()
+        WARMUP_SECONDS = 90  # Don't send alerts during first 90 seconds while curves are building
+
+        while True:
+            time.sleep(30)
+
+            # Skip alerts during warmup period
+            elapsed = (datetime.datetime.now() - start_time).total_seconds()
+            if elapsed < WARMUP_SECONDS:
+                print(f"Warmup period: {int(WARMUP_SECONDS - elapsed)}s remaining, skipping anomaly alerts...")
+                continue
+
+            for name, vols in app.volatilities.items():
+                strks = list(sorted(list(vols.keys())))
+                mid_vols = []
+                real_strks = []
+                vol_data = []  # Store full data for anomaly reporting
+
+                for strk in strks:
+                    if vols[strk]['bid_vol'] is None or vols[strk]['ask_vol'] is None:
+                        continue
+                    mid_vol = (vols[strk]['bid_vol'] + vols[strk]['ask_vol']) / 2
+                    mid_vols.append(mid_vol)
+                    real_strks.append(strk)
+                    vol_data.append({
+                        'strike': strk,
+                        'bid_vol': vols[strk]['bid_vol'],
+                        'ask_vol': vols[strk]['ask_vol'],
+                        'mid_vol': mid_vol,
+                        'bid_price': vols[strk].get('bid_price'),
+                        'ask_price': vols[strk].get('ask_price'),
+                        'underlying_price': vols[strk].get('underlying_price')
+                    })
+
+                # Use spread-aware anomaly detection
+                anomalies = find_anomalies_spread_aware(vol_data)
+
+                if anomalies:
+                    if name not in last_anom or seconds_to_now(last_anom[name]) > 60 * 30:
+                        # Parse name to get option type and expiration
+                        parts = name.split('_')
+                        symbol = parts[0]
+                        option_type = parts[1]
+                        expiration = parts[2]
+
+                        # Calculate DTE
+                        dte = calculate_days_to_expiry(expiration)
+
+                        # Separate strong (arbitrage) from normal anomalies
+                        strong_anomalies = [(i, r, s) for i, r, s in anomalies if s == 'STRONG']
+                        normal_anomalies = [(i, r, s) for i, r, s in anomalies if s == 'NORMAL']
+
+                        # Create plot with highlighted anomalies
+                        plt.figure(figsize=(12, 7))
+                        plt.scatter(real_strks, mid_vols, label='Mid IV', color='blue', alpha=0.6)
+
+                        # Highlight normal anomaly points (yellow X)
+                        if normal_anomalies:
+                            normal_strks = [real_strks[idx] for idx, _, _ in normal_anomalies]
+                            normal_vols = [mid_vols[idx] for idx, _, _ in normal_anomalies]
+                            plt.scatter(normal_strks, normal_vols, color='orange', s=150, marker='X', label='Shape Anomaly', zorder=5)
+
+                        # Highlight strong anomaly points (red star)
+                        if strong_anomalies:
+                            strong_strks = [real_strks[idx] for idx, _, _ in strong_anomalies]
+                            strong_vols = [mid_vols[idx] for idx, _, _ in strong_anomalies]
+                            plt.scatter(strong_strks, strong_vols, color='red', s=200, marker='*', label='ARBITRAGE', zorder=6)
+
+                        # Add annotations for all anomalies
+                        for idx, reason, strength in anomalies:
+                            color = 'red' if strength == 'STRONG' else 'orange'
+                            plt.annotate(f'K={real_strks[idx]}',
+                                       (real_strks[idx], mid_vols[idx]),
+                                       textcoords="offset points", xytext=(0,10),
+                                       ha='center', fontsize=9, color=color, fontweight='bold' if strength == 'STRONG' else 'normal')
+
+                        plt.grid(True)
+                        plt.legend()
+                        plt.xlabel('Strike')
+                        plt.ylabel('Mid IV')
+                        plt.ylim([round_down_to_closest_10(min(mid_vols)), round_up_to_closest_10(max(mid_vols))])
+
+                        # Title indicates if there's arbitrage
+                        if strong_anomalies:
+                            plt.title(f'⚠️ ARBITRAGE in {name} (DTE={dte})')
+                        else:
+                            plt.title(f'Anomaly in {name} (DTE={dte})')
+                        plt.savefig('vol.png', dpi=100, bbox_inches='tight')
+                        plt.close()
+
+                        # Build detailed message
+                        if strong_anomalies:
+                            msg = f"🔥 *ARBITRAGE detected in {name}*\n"
+                        else:
+                            msg = f"🚨 *Anomaly detected in {name}*\n"
+                        msg += f"_DTE: {dte} days_\n\n"
+
+                        for idx, reason, strength in anomalies:
+                            data = vol_data[idx]
+                            strk = data['strike']
+                            bid_vol = data['bid_vol']
+                            ask_vol = data['ask_vol']
+                            bid_price = data['bid_price']
+                            ask_price = data['ask_price']
+                            und_price = data['underlying_price']
+
+                            # Calculate spread
+                            iv_spread = (ask_vol - bid_vol) * 100
+                            iv_spread_pct = (ask_vol - bid_vol) / ((bid_vol + ask_vol) / 2) * 100
+
+                            prefix = "🔥" if strength == 'STRONG' else "⚠️"
+                            msg += f"{prefix} *Strike {strk}:* {reason}\n"
+                            msg += f"  IV: Bid={bid_vol*100:.1f}% / Ask={ask_vol*100:.1f}% (spread={iv_spread:.1f}%, {iv_spread_pct:.1f}%)\n"
+
+                            # Calculate time value if we have prices
+                            if bid_price and ask_price and und_price and dte > 0:
+                                intrinsic = calculate_intrinsic_value(strk, und_price, option_type)
+                                bid_tv = bid_price - intrinsic
+                                ask_tv = ask_price - intrinsic
+                                bid_tv_ann = calculate_time_value_annualized(bid_price, intrinsic, und_price, dte)
+                                ask_tv_ann = calculate_time_value_annualized(ask_price, intrinsic, und_price, dte)
+                                price_spread = ask_price - bid_price
+                                msg += f"  Underlying: ${und_price:.2f}\n"
+                                msg += f"  Price: Bid=${bid_price:.2f} / Ask=${ask_price:.2f} (spread=${price_spread:.2f})\n"
+                                msg += f"  Intrinsic: ${intrinsic:.2f}\n"
+                                msg += f"  Time Value: Bid=${bid_tv:.2f} / Ask=${ask_tv:.2f}\n"
+                                msg += f"  Time Value (ann): Bid={bid_tv_ann:.1f}% / Ask={ask_tv_ann:.1f}%\n"
+                            msg += "\n"
+
+                        bot.send_photo(chat_id, open('vol.png', 'rb'))
+                        bot.send_message(chat_id, msg, parse_mode='Markdown')
+
+                        # Send full IV smile plot after anomaly message
+                        if generate_iv_smile_plot(app, name, 'iv_smile.png'):
+                            bot.send_photo(chat_id, open('iv_smile.png', 'rb'), caption=f"IV Smile: {name}")
+
+                        last_anom[name] = datetime.datetime.now()
 
     except KeyboardInterrupt:
         print("\nShutting down...")
