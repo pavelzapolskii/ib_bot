@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  # IB Gateway with virtual display (for headless server)
+  ib-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    restart: unless-stopped
+    environment:
+      TWS_USERID: ${IB_USERNAME}
+      TWS_PASSWORD: ${IB_PASSWORD}
+      TRADING_MODE: ${IB_TRADING_MODE:-paper}  # paper or live
+      TWS_ACCEPT_INCOMING: "yes"
+      READ_ONLY_API: "no"
+      VNC_SERVER_PASSWORD: ${VNC_PASSWORD:-password}
+    ports:
+      - "4001:4001"   # IB Gateway API (live)
+      - "4002:4002"   # IB Gateway API (paper)
+      - "5900:5900"   # VNC for manual login/2FA
+    volumes:
+      - ib-gateway-data:/root/Jts
+    networks:
+      - ib-network
+
+  # IB Options Bot (Telegram alerts only, no database)
+  ib-bot:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - ib-gateway
+    environment:
+      # Telegram
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      # IB Gateway (connect to container)
+      IB_HOST: ib-gateway
+      IB_PORT: 4002  # Paper trading port
+      IB_CLIENT_ID: ${IB_CLIENT_ID:-22}
+    networks:
+      - ib-network
+
+volumes:
+  ib-gateway-data:
+
+networks:
+  ib-network:
+    driver: bridge

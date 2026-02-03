@@ -1,9 +1,6 @@
 # Environment variables (contains secrets)
 .env
 
-# Work in progress - not ready for publishing
-headless_server_bot/
-
 # Python
 __pycache__/
 *.py[cod]
