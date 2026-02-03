@@ -180,7 +180,7 @@ chat_id = TELEGRAM_CHAT_ID
 
 # ETF options: GLD (Gold), SLV (Silver), SPY (S&P 500)
 symbols = [
-    'GLD',
+    # 'GLD',
     'SLV',
     # 'SPY',
 ]
