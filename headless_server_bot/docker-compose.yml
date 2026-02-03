@@ -8,9 +8,9 @@ services:
     environment:
       TWS_USERID: ${IB_USERNAME}
       TWS_PASSWORD: ${IB_PASSWORD}
-      TRADING_MODE: ${IB_TRADING_MODE:-paper}  # paper or live
+      TRADING_MODE: ${IB_TRADING_MODE:-live}  # Using live for market data
       TWS_ACCEPT_INCOMING: "yes"
-      READ_ONLY_API: "no"
+      READ_ONLY_API: "yes"  # READ ONLY - no trading allowed!
       VNC_SERVER_PASSWORD: ${VNC_PASSWORD:-password}
       # Trust all Docker network IPs for API connections
       TWOFA_TIMEOUT_ACTION: restart
@@ -22,7 +22,6 @@ services:
       - "4001:4001"   # IB Gateway API (live) - internal
       - "4002:4002"   # IB Gateway API (paper) - internal
       - "4003:4003"   # IB Gateway API (live) - socat relay for external connections
-      - "4004:4004"   # IB Gateway API (paper) - socat relay for external connections
       - "5900:5900"   # VNC for manual login/2FA
     volumes:
       - ib-gateway-data:/root/Jts
@@ -42,7 +41,7 @@ services:
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
       # IB Gateway (connect via socat relay port for external connections)
       IB_HOST: ib-gateway
-      IB_PORT: 4004  # Paper trading port (socat relay)
+      IB_PORT: 4003  # Live trading port (socat relay) - READ ONLY MODE
       IB_CLIENT_ID: ${IB_CLIENT_ID:-22}
     networks:
       - ib-network
