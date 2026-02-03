@@ -210,6 +210,7 @@ class PriceFetcher(EWrapper, EClient):
         EClient.__init__(self, self)
         self.prices = {}
         self.price_event = threading.Event()
+        self.connected_event = threading.Event()
         self.reqId_to_symbol = {}  # Map reqId -> symbol
 
     def error(self, reqId, errorCode, errorString, advancedOrderRejectJson=""):
@@ -227,19 +228,30 @@ class PriceFetcher(EWrapper, EClient):
                     self.price_event.set()
 
     def nextValidId(self, orderId):
-        pass
+        """Called when connection is ready"""
+        print(f"PriceFetcher connected, orderId={orderId}")
+        self.connected_event.set()
 
 
 def fetch_current_prices(host, port, client_id):
     """Fetch current prices for ETFs"""
-    print("Fetching current ETF prices...")
+    print(f"Fetching current ETF prices from {host}:{port}...")
 
     fetcher = PriceFetcher()
     fetcher.connect(host, port, clientId=client_id)
 
     api_thread = threading.Thread(target=fetcher.run, daemon=True)
     api_thread.start()
-    time.sleep(2)  # Wait for connection
+
+    # Wait for connection to be ready
+    print("Waiting for PriceFetcher connection...")
+    if not fetcher.connected_event.wait(timeout=15):
+        print("ERROR: PriceFetcher connection timeout!")
+        fetcher.disconnect()
+        return {}
+
+    print("PriceFetcher connected!")
+    time.sleep(0.5)
 
     # Request market data for each symbol
     for i, symbol in enumerate(symbols):
@@ -251,8 +263,8 @@ def fetch_current_prices(host, port, client_id):
         contract.currency = "USD"
         fetcher.reqMktData(i, contract, "", False, False, [])
 
-    # Wait for prices (max 10 seconds)
-    fetcher.price_event.wait(timeout=10)
+    # Wait for prices (max 15 seconds)
+    fetcher.price_event.wait(timeout=15)
     fetcher.disconnect()
     time.sleep(1)
 
