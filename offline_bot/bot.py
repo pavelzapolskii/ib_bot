@@ -389,16 +389,16 @@ def fetch_iv_smile(host, port, client_id, symbol, expiration, option_type, strik
         fetcher.reqMktData(i, contract, "232", False, False, [])
 
         # Rate limiting - slower to avoid overwhelming IB
-        if (i + 1) % 40 == 0:
+        if (i + 1) % 20 == 0:
             print(f"  Requested {i + 1}/{len(strikes)} strikes, pausing...")
-            time.sleep(2)
+            time.sleep(3.0)  # Longer pause every 20 requests
         else:
-            time.sleep(0.05)  # Small delay between each request
+            time.sleep(0.15)  # 150ms between each request
 
     print(f"All {len(strikes)} strike requests sent, waiting for data...")
 
-    # Wait for data (max 45 seconds for larger strike ranges)
-    got_data = fetcher.done_event.wait(timeout=45)
+    # Wait for data (max 90 seconds for larger strike ranges)
+    got_data = fetcher.done_event.wait(timeout=90)
 
     if got_data:
         print(f"Fetch completed! Received {fetcher.received_count} ticks")
@@ -780,17 +780,17 @@ class IBApp(EWrapper, EClient):
             self.fresh_iv_strikes[req_id] = strike
             self.reqMktData(req_id, contract, "232", False, False, [])
 
-            # Rate limiting
-            if (i + 1) % 40 == 0:
+            # Rate limiting - more conservative to avoid "Max tickers" error
+            if (i + 1) % 20 == 0:
                 print(f"  Requested {i + 1}/{len(strikes)} strikes...")
-                time.sleep(1.5)
+                time.sleep(2.0)  # Longer pause every 20 requests
             else:
-                time.sleep(0.03)
+                time.sleep(0.15)  # 150ms between each request
 
         print(f"All {len(strikes)} requests sent, waiting for data...")
 
-        # Wait for data (max 30 seconds)
-        got_data = self.fresh_iv_done.wait(timeout=30)
+        # Wait for data (max 60 seconds)
+        got_data = self.fresh_iv_done.wait(timeout=60)
 
         # Cancel all fresh IV subscriptions
         for i in range(len(strikes)):
