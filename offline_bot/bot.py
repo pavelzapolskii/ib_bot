@@ -752,6 +752,64 @@ class IBApp(EWrapper, EClient):
             self.subscriptions_paused = False
             print("All subscriptions resumed.")
 
+    def fetch_fresh_iv_smile(self, symbol, expiration, option_type, strikes):
+        """Fetch fresh IV smile using THIS connection (after pausing main subscriptions)"""
+        print(f"Fetching fresh IV for {symbol} {option_type} {expiration} ({len(strikes)} strikes)...")
+
+        # Use high request IDs to avoid collision with main subscriptions (0-999)
+        base_req_id = 10000
+        fresh_iv_data = {s: {'bid_vol': None, 'ask_vol': None, 'bid_price': None, 'ask_price': None, 'underlying_price': None} for s in strikes}
+        self.fresh_iv_strikes = {}  # Map reqId -> strike
+        self.fresh_iv_data = fresh_iv_data
+        self.fresh_iv_received = 0
+        self.fresh_iv_expected = len(strikes) * 2
+        self.fresh_iv_done = threading.Event()
+
+        # Request IV data for each strike
+        for i, strike in enumerate(strikes):
+            req_id = base_req_id + i
+            contract = Contract()
+            contract.symbol = symbol
+            contract.secType = "OPT"
+            contract.exchange = "SMART"
+            contract.currency = "USD"
+            contract.lastTradeDateOrContractMonth = expiration
+            contract.strike = float(strike)
+            contract.right = option_type
+
+            self.fresh_iv_strikes[req_id] = strike
+            self.reqMktData(req_id, contract, "232", False, False, [])
+
+            # Rate limiting
+            if (i + 1) % 40 == 0:
+                print(f"  Requested {i + 1}/{len(strikes)} strikes...")
+                time.sleep(1.5)
+            else:
+                time.sleep(0.03)
+
+        print(f"All {len(strikes)} requests sent, waiting for data...")
+
+        # Wait for data (max 30 seconds)
+        got_data = self.fresh_iv_done.wait(timeout=30)
+
+        # Cancel all fresh IV subscriptions
+        for i in range(len(strikes)):
+            req_id = base_req_id + i
+            try:
+                self.cancelMktData(req_id)
+            except:
+                pass
+
+        time.sleep(0.5)
+
+        valid_count = sum(1 for s in strikes if fresh_iv_data[s]['bid_vol'] is not None or fresh_iv_data[s]['ask_vol'] is not None)
+        print(f"Fresh IV fetch: {self.fresh_iv_received} ticks, {valid_count}/{len(strikes)} strikes with data")
+
+        # Cleanup
+        self.fresh_iv_strikes = {}
+
+        return fresh_iv_data
+
     def historicalData(self, reqId, bar):
         bot.send_message(chat_id, str(bar))
 
@@ -763,6 +821,29 @@ class IBApp(EWrapper, EClient):
 
     def tickOptionComputation(self, tickerId, field, tickAttrib, impliedVolatility, delta, optPrice, pvDividend, gamma, vega, theta, undPrice):
         super().tickOptionComputation(tickerId, field, tickAttrib, impliedVolatility, delta, optPrice, pvDividend, gamma, vega, theta, undPrice)
+
+        # Handle fresh IV fetch requests (reqId >= 10000)
+        if tickerId >= 10000 and hasattr(self, 'fresh_iv_strikes') and tickerId in self.fresh_iv_strikes:
+            strike = self.fresh_iv_strikes[tickerId]
+            if impliedVolatility is not None and impliedVolatility > 0:
+                if field == 10:  # BID
+                    self.fresh_iv_data[strike]['bid_vol'] = impliedVolatility
+                    self.fresh_iv_data[strike]['bid_price'] = optPrice
+                    self.fresh_iv_data[strike]['underlying_price'] = undPrice
+                    self.fresh_iv_received += 1
+                elif field == 11:  # ASK
+                    self.fresh_iv_data[strike]['ask_vol'] = impliedVolatility
+                    self.fresh_iv_data[strike]['ask_price'] = optPrice
+                    self.fresh_iv_data[strike]['underlying_price'] = undPrice
+                    self.fresh_iv_received += 1
+
+                # Print progress
+                if self.fresh_iv_received <= 3 or self.fresh_iv_received % 20 == 0:
+                    print(f"  Fresh IV: {self.fresh_iv_received}/{self.fresh_iv_expected} (strike={strike}, field={field})")
+
+                if self.fresh_iv_received >= self.fresh_iv_expected:
+                    self.fresh_iv_done.set()
+            return
 
         # Throttle: only insert every 60 seconds per contract/field
         key = (tickerId, field)
@@ -1353,14 +1434,11 @@ _Only alerts when spread < 5%_
                 strikes = list(strike_ranges[symbol])
 
                 # Send "fetching" message
-                bot.send_message(call.message.chat.id, f"🔄 Fetching fresh IV data for {symbol} {option_type} {expiration}...\n⏸️ Pausing main subscriptions...")
+                bot.send_message(call.message.chat.id, f"🔄 Fetching fresh IV data for {symbol} {option_type} {expiration}...")
 
                 try:
-                    # PAUSE main subscriptions to free up ticker slots
-                    app.pause_subscriptions()
-
-                    # Fetch fresh IV data using a separate IB connection
-                    iv_data = fetch_iv_smile(IB_HOST, IB_PORT, IB_CLIENT_ID + 200, symbol, expiration, option_type, strikes)
+                    # Fetch fresh IV using MAIN app connection (no need to pause - uses different reqIds)
+                    iv_data = app.fetch_fresh_iv_smile(symbol, expiration, option_type, strikes)
 
                     # Update the main app's volatilities with fresh data
                     symbol_key = f"{symbol}_{option_type}_{expiration}"
@@ -1389,9 +1467,6 @@ _Only alerts when spread < 5%_
                     msg += "\n\n_Use /market to check market hours_"
                     bot.send_message(call.message.chat.id, msg, parse_mode='Markdown')
                     return
-                finally:
-                    # ALWAYS resume subscriptions, even if there was an error
-                    app.resume_subscriptions()
 
             # Filter out None values
             valid_bids = [v for v in bidvol if v is not None]
