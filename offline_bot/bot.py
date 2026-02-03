@@ -14,7 +14,7 @@ import threading
 import datetime
 import matplotlib.pyplot as plt
 import numpy as np
-from connection import get_sql
+from connection import get_sql, get_clickhouse_connection
 from black_scholes import call_delta, put_delta, call_gamma, call_vega, call_theta, put_theta
 import math
 import pytz
@@ -367,20 +367,20 @@ def fetch_iv_smile(host, port, client_id, symbol, expiration, option_type, strik
         fetcher.reqMktData(i, contract, "232", True, False, [])
 
         # Rate limiting - slower to avoid overwhelming IB
-        if (i + 1) % 20 == 0:
-            time.sleep(1.5)
+        if (i + 1) % 15 == 0:
+            time.sleep(2.5)
         else:
-            time.sleep(0.05)  # Small delay between each request
+            time.sleep(0.1)  # Small delay between each request
 
-    # Wait for data (max 20 seconds for larger strike ranges)
-    fetcher.done_event.wait(timeout=20)
+    # Wait for data (max 45 seconds for larger strike ranges)
+    fetcher.done_event.wait(timeout=45)
 
     # Cancel any remaining subscriptions (in case snapshot didn't work)
     fetcher.cancel_all_market_data()
-    time.sleep(0.5)
+    time.sleep(1)
 
     fetcher.disconnect()
-    time.sleep(0.5)
+    time.sleep(1)
 
     return fetcher.iv_data
 
@@ -796,12 +796,26 @@ class IBApp(EWrapper, EClient):
         print(f"Saved: {contract.symbol} {contract.right} {strike} {data_type} IV={impliedVolatility:.4f}" if impliedVolatility else "")
 
 
+def truncate_clickhouse_data():
+    """Truncate the options.greeks table on startup to start fresh"""
+    print("Truncating ClickHouse options.greeks table...")
+    try:
+        with get_clickhouse_connection() as client:
+            client.execute("TRUNCATE TABLE options.greeks")
+        print("✓ ClickHouse table truncated successfully")
+    except Exception as e:
+        print(f"Warning: Could not truncate ClickHouse table: {e}")
+
+
 if __name__ == '__main__':
     print("=" * 50)
     print("IB Options Monitor Bot - GLD/SLV/SPY ETF Options")
     print("=" * 50)
 
     try:
+        # Step 0: Truncate ClickHouse database to start fresh
+        truncate_clickhouse_data()
+
         # Step 1: Fetch current prices for GLD and SLV
         prices = fetch_current_prices(IB_HOST, IB_PORT, IB_CLIENT_ID)
 
