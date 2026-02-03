@@ -624,6 +624,8 @@ class IBApp(EWrapper, EClient):
         self.strike_ranges = strike_ranges_dict
         self.contract_details = {}
         self.connected_event = threading.Event()
+        self.subscriptions_paused = False
+        self.subscription_lock = threading.Lock()
 
         # Store bid/ask IV and prices per contract
         self.volatilities = {
@@ -682,6 +684,39 @@ class IBApp(EWrapper, EClient):
             bot.send_message(chat_id, "🔴 *Bot Disconnected*\nIB connection has been closed.", parse_mode='Markdown')
         except:
             pass
+
+    def pause_subscriptions(self):
+        """Cancel all market data subscriptions to free up ticker slots"""
+        with self.subscription_lock:
+            if self.subscriptions_paused:
+                return
+            print("Pausing all market data subscriptions...")
+            for i in range(len(self.contracts)):
+                try:
+                    self.cancelMktData(i)
+                except:
+                    pass
+                if (i + 1) % 50 == 0:
+                    time.sleep(0.5)
+            self.subscriptions_paused = True
+            time.sleep(2)  # Give IB time to process cancellations
+            print("All subscriptions paused.")
+
+    def resume_subscriptions(self):
+        """Re-subscribe to all market data"""
+        with self.subscription_lock:
+            if not self.subscriptions_paused:
+                return
+            print("Resuming market data subscriptions...")
+            for i, contract in enumerate(self.contracts):
+                try:
+                    self.reqMktData(i, contract, "232", False, False, [])
+                except:
+                    pass
+                if (i + 1) % 40 == 0:
+                    time.sleep(2)
+            self.subscriptions_paused = False
+            print("All subscriptions resumed.")
 
     def historicalData(self, reqId, bar):
         bot.send_message(chat_id, str(bar))
@@ -1284,9 +1319,12 @@ _Only alerts when spread < 5%_
                 strikes = list(strike_ranges[symbol])
 
                 # Send "fetching" message
-                bot.send_message(call.message.chat.id, f"🔄 Fetching fresh IV data for {symbol} {option_type} {expiration}...")
+                bot.send_message(call.message.chat.id, f"🔄 Fetching fresh IV data for {symbol} {option_type} {expiration}...\n⏸️ Pausing main subscriptions...")
 
                 try:
+                    # PAUSE main subscriptions to free up ticker slots
+                    app.pause_subscriptions()
+
                     # Fetch fresh IV data using a separate IB connection
                     iv_data = fetch_iv_smile(IB_HOST, IB_PORT, IB_CLIENT_ID + 200, symbol, expiration, option_type, strikes)
 
@@ -1317,6 +1355,9 @@ _Only alerts when spread < 5%_
                     msg += "\n\n_Use /market to check market hours_"
                     bot.send_message(call.message.chat.id, msg, parse_mode='Markdown')
                     return
+                finally:
+                    # ALWAYS resume subscriptions, even if there was an error
+                    app.resume_subscriptions()
 
             # Filter out None values
             valid_bids = [v for v in bidvol if v is not None]
