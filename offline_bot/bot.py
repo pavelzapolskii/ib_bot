@@ -17,9 +17,111 @@ import numpy as np
 from connection import get_sql
 from black_scholes import call_delta, put_delta, call_gamma, call_vega, call_theta, put_theta
 import math
+import pytz
 
 # Load environment variables from .env file
 load_dotenv()
+
+
+def get_market_status():
+    """
+    Check if US stock market is currently open.
+    Returns dict with status info.
+    NYSE/NASDAQ hours: 9:30 AM - 4:00 PM ET, Mon-Fri (excluding holidays)
+    """
+    # Major US market holidays for 2025-2026
+    holidays = [
+        # 2025
+        datetime.date(2025, 1, 1),   # New Year's Day
+        datetime.date(2025, 1, 20),  # MLK Day
+        datetime.date(2025, 2, 17),  # Presidents Day
+        datetime.date(2025, 4, 18),  # Good Friday
+        datetime.date(2025, 5, 26),  # Memorial Day
+        datetime.date(2025, 6, 19),  # Juneteenth
+        datetime.date(2025, 7, 4),   # Independence Day
+        datetime.date(2025, 9, 1),   # Labor Day
+        datetime.date(2025, 11, 27), # Thanksgiving
+        datetime.date(2025, 12, 25), # Christmas
+        # 2026
+        datetime.date(2026, 1, 1),   # New Year's Day
+        datetime.date(2026, 1, 19),  # MLK Day
+        datetime.date(2026, 2, 16),  # Presidents Day
+        datetime.date(2026, 4, 3),   # Good Friday
+        datetime.date(2026, 5, 25),  # Memorial Day
+        datetime.date(2026, 6, 19),  # Juneteenth
+        datetime.date(2026, 7, 3),   # Independence Day (observed)
+        datetime.date(2026, 9, 7),   # Labor Day
+        datetime.date(2026, 11, 26), # Thanksgiving
+        datetime.date(2026, 12, 25), # Christmas
+    ]
+
+    et = pytz.timezone('America/New_York')
+    now_et = datetime.datetime.now(et)
+    today = now_et.date()
+
+    # Check if weekend
+    if now_et.weekday() >= 5:  # Saturday=5, Sunday=6
+        next_open = today + datetime.timedelta(days=(7 - now_et.weekday()))
+        return {
+            'is_open': False,
+            'reason': 'Weekend',
+            'current_time_et': now_et.strftime('%H:%M ET'),
+            'next_open': next_open.strftime('%A, %b %d'),
+            'message': f"📅 Market closed (Weekend)\n⏰ Current time: {now_et.strftime('%H:%M ET')}\n📆 Opens: Monday {next_open.strftime('%b %d')} at 9:30 AM ET"
+        }
+
+    # Check if holiday
+    if today in holidays:
+        next_open = today + datetime.timedelta(days=1)
+        while next_open in holidays or next_open.weekday() >= 5:
+            next_open += datetime.timedelta(days=1)
+        return {
+            'is_open': False,
+            'reason': 'Holiday',
+            'current_time_et': now_et.strftime('%H:%M ET'),
+            'next_open': next_open.strftime('%A, %b %d'),
+            'message': f"🎄 Market closed (Holiday)\n⏰ Current time: {now_et.strftime('%H:%M ET')}\n📆 Opens: {next_open.strftime('%A, %b %d')} at 9:30 AM ET"
+        }
+
+    # Check trading hours (9:30 AM - 4:00 PM ET)
+    market_open = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+    market_close = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
+
+    if now_et < market_open:
+        mins_until = int((market_open - now_et).total_seconds() / 60)
+        hours = mins_until // 60
+        mins = mins_until % 60
+        return {
+            'is_open': False,
+            'reason': 'Pre-market',
+            'current_time_et': now_et.strftime('%H:%M ET'),
+            'opens_in': f"{hours}h {mins}m",
+            'message': f"🌅 Market not yet open (Pre-market)\n⏰ Current time: {now_et.strftime('%H:%M ET')}\n⏳ Opens in: {hours}h {mins}m (9:30 AM ET)"
+        }
+
+    if now_et > market_close:
+        next_open = today + datetime.timedelta(days=1)
+        while next_open in holidays or next_open.weekday() >= 5:
+            next_open += datetime.timedelta(days=1)
+        return {
+            'is_open': False,
+            'reason': 'After-hours',
+            'current_time_et': now_et.strftime('%H:%M ET'),
+            'next_open': next_open.strftime('%A, %b %d'),
+            'message': f"🌙 Market closed (After-hours)\n⏰ Current time: {now_et.strftime('%H:%M ET')}\n📆 Opens: {next_open.strftime('%A, %b %d')} at 9:30 AM ET"
+        }
+
+    # Market is open
+    mins_until_close = int((market_close - now_et).total_seconds() / 60)
+    hours = mins_until_close // 60
+    mins = mins_until_close % 60
+    return {
+        'is_open': True,
+        'reason': 'Open',
+        'current_time_et': now_et.strftime('%H:%M ET'),
+        'closes_in': f"{hours}h {mins}m",
+        'message': f"✅ Market is OPEN\n⏰ Current time: {now_et.strftime('%H:%M ET')}\n⏳ Closes in: {hours}h {mins}m (4:00 PM ET)"
+    }
 
 # Configuration from environment variables
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -759,6 +861,12 @@ if __name__ == '__main__':
             status_text = f"Bot is running!\nMonitoring: {', '.join(symbols)}\nContracts: {len(contracts)}"
             bot.send_message(message.chat.id, status_text)
 
+        @bot.message_handler(commands=['market', 'market_status'])
+        def send_market_status(message):
+            """Check if US stock market is currently open"""
+            status = get_market_status()
+            bot.send_message(message.chat.id, status['message'], parse_mode='Markdown')
+
         @bot.message_handler(commands=['menu', 'help', 'start'])
         def send_menu(message):
             """Show all available commands"""
@@ -775,6 +883,7 @@ _GLD/SLV/SPY ETF Options_
 
 ℹ️ *Info*
 /status - Bot status & contract count
+/market - Check if market is open
 /menu - Show this menu
 
 *IV Smile Options:*
@@ -817,7 +926,11 @@ _Only alerts when spread < 5%_
                 current_prices = fetch_current_prices(IB_HOST, IB_PORT, IB_CLIENT_ID + 100)
 
                 if not current_prices:
-                    bot.send_message(message.chat.id, "Could not fetch current prices. Make sure TWS is connected.")
+                    status = get_market_status()
+                    msg = "❌ Could not fetch current prices.\n\n"
+                    msg += status['message']
+                    msg += "\n\n_Use /market to check market hours_"
+                    bot.send_message(message.chat.id, msg, parse_mode='Markdown')
                     return
 
                 # Calculate ATM strikes using forward price
@@ -1164,7 +1277,11 @@ _Only alerts when spread < 5%_
                     title_suffix = " (Fresh)"
 
                 except Exception as e:
-                    bot.send_message(call.message.chat.id, f"Error fetching data: {str(e)}")
+                    status = get_market_status()
+                    msg = f"❌ Error fetching data: {str(e)}\n\n"
+                    msg += status['message']
+                    msg += "\n\n_Use /market to check market hours_"
+                    bot.send_message(call.message.chat.id, msg, parse_mode='Markdown')
                     return
 
             # Filter out None values
@@ -1173,7 +1290,11 @@ _Only alerts when spread < 5%_
 
             all_valid = valid_bids + valid_asks
             if not all_valid:
-                bot.send_message(call.message.chat.id, "No IV data received. Market may be closed or no quotes available.")
+                status = get_market_status()
+                msg = "❌ No IV data received.\n\n"
+                msg += status['message']
+                msg += "\n\n_Use /market to check market hours_"
+                bot.send_message(call.message.chat.id, msg, parse_mode='Markdown')
                 return
 
             min_value = round_down_to_closest_10(min(all_valid))
