@@ -9,3 +9,6 @@ matplotlib>=3.7.0
 
 # Environment
 python-dotenv>=1.0.0
+
+# Timezone
+pytz>=2023.3
