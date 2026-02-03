@@ -19,8 +19,10 @@ services:
       # Allow API connections from any IP (Docker network uses 172.x.x.x)
       IBC_TrustedIPs: "172.0.0.0-172.255.255.255"
     ports:
-      - "4001:4001"   # IB Gateway API (live)
-      - "4002:4002"   # IB Gateway API (paper)
+      - "4001:4001"   # IB Gateway API (live) - internal
+      - "4002:4002"   # IB Gateway API (paper) - internal
+      - "4003:4003"   # IB Gateway API (live) - socat relay for external connections
+      - "4004:4004"   # IB Gateway API (paper) - socat relay for external connections
       - "5900:5900"   # VNC for manual login/2FA
     volumes:
       - ib-gateway-data:/root/Jts
@@ -38,9 +40,9 @@ services:
       # Telegram
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
-      # IB Gateway (connect to container)
+      # IB Gateway (connect via socat relay port for external connections)
       IB_HOST: ib-gateway
-      IB_PORT: 4002  # Paper trading port
+      IB_PORT: 4004  # Paper trading port (socat relay)
       IB_CLIENT_ID: ${IB_CLIENT_ID:-22}
     networks:
       - ib-network
