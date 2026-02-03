@@ -7,7 +7,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '8370064054:AAH0g71KvuN_EcsviEohYTstQTRe54XVljs')
+TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+if not TOKEN:
+    print("Error: TELEGRAM_BOT_TOKEN not set in environment or .env file")
+    exit(1)
 
 def get_updates():
     url = f"https://api.telegram.org/bot{TOKEN}/getUpdates"
@@ -22,7 +25,7 @@ def get_updates():
 
     if not updates:
         print("No messages found.")
-        print("Please send a message to your bot @ib_adviser_bot first!")
+        print("Please send a message to your bot first!")
         return
 
     print("Found chats:")

@@ -11,7 +11,7 @@ Production version for headless servers. Uses IB Gateway in Docker, no database.
 
 1. Clone and enter directory:
 ```bash
-git clone https://github.com/pavelzapolskii/ib_bot.git
+git clone https://github.com/YOUR_USERNAME/ib_bot.git
 cd ib_bot/headless_server_bot
 ```
 
