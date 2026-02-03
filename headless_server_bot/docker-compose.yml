@@ -27,6 +27,7 @@ services:
     restart: unless-stopped
     depends_on:
       - ib-gateway
+    command: sh -c "echo 'Waiting 60s for IB Gateway to start...' && sleep 60 && python bot.py"
     environment:
       # Telegram
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
