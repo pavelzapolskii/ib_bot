@@ -289,6 +289,7 @@ class IVSmileFetcher(EWrapper, EClient):
         self.received_count = 0
         self.expected_count = len(strikes) * 2  # bid and ask for each strike
         self.done_event = threading.Event()
+        self.connected_event = threading.Event()  # Wait for connection
         self.reqId_to_strike = {}
         self.active_req_ids = []  # Track active subscriptions for cleanup
 
@@ -296,13 +297,15 @@ class IVSmileFetcher(EWrapper, EClient):
         if errorCode not in [2104, 2106, 2158]:
             print(f"IVSmileFetcher Error {reqId} {errorCode}: {errorString}")
         # If we get an error for a contract, count it as received to avoid hanging
-        if errorCode in [200, 10091, 101]:  # No security / subscription needed / max tickers
+        if errorCode in [200, 10091, 101, 504]:  # No security / subscription needed / max tickers / not connected
             self.received_count += 2  # Count both bid and ask as done
             if self.received_count >= self.expected_count:
                 self.done_event.set()
 
     def nextValidId(self, orderId):
-        pass
+        """Called when connection is ready"""
+        print(f"IVSmileFetcher connected, orderId={orderId}")
+        self.connected_event.set()
 
     def tickOptionComputation(self, tickerId, field, tickAttrib, impliedVolatility, delta, optPrice, pvDividend, gamma, vega, theta, undPrice):
         strike = self.reqId_to_strike.get(tickerId)
@@ -343,7 +346,16 @@ def fetch_iv_smile(host, port, client_id, symbol, expiration, option_type, strik
 
     api_thread = threading.Thread(target=fetcher.run, daemon=True)
     api_thread.start()
-    time.sleep(1)  # Wait for connection
+
+    # Wait for connection to be ready (max 10 seconds)
+    print("Waiting for IVSmileFetcher connection...")
+    if not fetcher.connected_event.wait(timeout=10):
+        print("ERROR: IVSmileFetcher connection timeout!")
+        fetcher.disconnect()
+        raise Exception("Failed to connect to IB for fresh IV data")
+
+    print("IVSmileFetcher connected!")
+    time.sleep(0.5)
 
     # Request market data type (realtime)
     fetcher.reqMarketDataType(1)
