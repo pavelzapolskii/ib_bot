@@ -756,6 +756,11 @@ class IBApp(EWrapper, EClient):
         """Fetch fresh IV smile using THIS connection (after pausing main subscriptions)"""
         print(f"Fetching fresh IV for {symbol} {option_type} {expiration} ({len(strikes)} strikes)...")
 
+        # Check if connected
+        if not self.isConnected():
+            print("ERROR: Not connected to IB! Cannot fetch fresh IV.")
+            return {s: {'bid_vol': None, 'ask_vol': None, 'bid_price': None, 'ask_price': None, 'underlying_price': None} for s in strikes}
+
         # Use high request IDs to avoid collision with main subscriptions (0-999)
         base_req_id = 10000
         fresh_iv_data = {s: {'bid_vol': None, 'ask_vol': None, 'bid_price': None, 'ask_price': None, 'underlying_price': None} for s in strikes}

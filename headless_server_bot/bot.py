@@ -647,6 +647,7 @@ class IBApp(EWrapper, EClient):
         }
 
         self.last_update = dict()
+        self.tick_count = 0
 
     def nextValidId(self, orderId):
         """Called when connection is ready"""
@@ -721,6 +722,11 @@ class IBApp(EWrapper, EClient):
         """Fetch fresh IV smile using THIS connection (after pausing main subscriptions)"""
         print(f"Fetching fresh IV for {symbol} {option_type} {expiration} ({len(strikes)} strikes)...")
 
+        # Check if connected
+        if not self.isConnected():
+            print("ERROR: Not connected to IB! Cannot fetch fresh IV.")
+            return {s: {'bid_vol': None, 'ask_vol': None, 'bid_price': None, 'ask_price': None, 'underlying_price': None} for s in strikes}
+
         # Use high request IDs to avoid collision with main subscriptions (0-999)
         base_req_id = 10000
         fresh_iv_data = {s: {'bid_vol': None, 'ask_vol': None, 'bid_price': None, 'ask_price': None, 'underlying_price': None} for s in strikes}
@@ -786,6 +792,7 @@ class IBApp(EWrapper, EClient):
 
     def tickOptionComputation(self, tickerId, field, tickAttrib, impliedVolatility, delta, optPrice, pvDividend, gamma, vega, theta, undPrice):
         super().tickOptionComputation(tickerId, field, tickAttrib, impliedVolatility, delta, optPrice, pvDividend, gamma, vega, theta, undPrice)
+        self.tick_count += 1
 
         # Handle fresh IV fetch requests (reqId >= 10000)
         if tickerId >= 10000 and hasattr(self, 'fresh_iv_strikes') and tickerId in self.fresh_iv_strikes:
@@ -923,8 +930,16 @@ if __name__ == '__main__':
 
         @bot.message_handler(commands=['status'])
         def send_status(message):
-            status_text = f"Bot is running!\nMonitoring: {', '.join(symbols)}\nContracts: {len(contracts)}"
-            bot.send_message(message.chat.id, status_text)
+            connected = "✅ Connected" if app.isConnected() else "❌ Disconnected"
+            market = get_market_status()
+            market_icon = "🟢" if market['is_open'] else "🔴"
+            status_text = f"""📊 *Bot Status*
+IB Connection: {connected}
+Market: {market_icon} {market['status']}
+Monitoring: {', '.join(symbols)}
+Contracts: {len(contracts)}
+Ticks received: {app.tick_count if hasattr(app, 'tick_count') else 'N/A'}"""
+            bot.send_message(message.chat.id, status_text, parse_mode='Markdown')
 
         @bot.message_handler(commands=['market', 'market_status'])
         def send_market_status(message):
@@ -1295,6 +1310,11 @@ if __name__ == '__main__':
                 return
 
             strikes = list(strike_ranges[symbol])
+
+            # Check connection first
+            if not app.isConnected():
+                bot.send_message(call.message.chat.id, "❌ Not connected to IB. Connection may have dropped. Bot will auto-reconnect.")
+                return
 
             # Send "fetching" message
             bot.send_message(call.message.chat.id, f"🔄 Fetching fresh IV data for {symbol} {option_type} {expiration}...")
