@@ -1515,8 +1515,18 @@ _Only alerts when spread < 5%_
 
             bot.send_photo(call.message.chat.id, open('vol.png', 'rb'), caption=f"✅ Data: {bid_count} bids, {ask_count} asks")
 
-        # Start Telegram polling in separate thread
-        polling_thread = threading.Thread(target=bot.polling, daemon=True)
+        # Start Telegram polling in separate thread with auto-restart
+        def telegram_polling():
+            while True:
+                try:
+                    print("Starting Telegram polling...")
+                    bot.infinity_polling(timeout=30, long_polling_timeout=30)
+                except Exception as e:
+                    print(f"Telegram polling error: {e}")
+                    print("Restarting Telegram polling in 5 seconds...")
+                    time.sleep(5)
+
+        polling_thread = threading.Thread(target=telegram_polling, daemon=True)
         polling_thread.start()
 
         print("Bot is running! Use /ivc, /ivp, /status in Telegram")
