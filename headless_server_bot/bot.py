@@ -192,6 +192,13 @@ strike_offsets = {
     'SPY': 50,   # ±50 from current price
 }
 
+# Strike step size per symbol (SLV has $0.50 strikes)
+strike_steps = {
+    'GLD': 1.0,
+    'SLV': 0.5,
+    'SPY': 1.0,
+}
+
 # Expiration dates - 3 tenors
 expiration_dates = {
     'GLD': ['20260220', '20260320', '20260417'],  # Feb 20, Mar 20, Apr 17 2026
@@ -405,11 +412,12 @@ def build_strike_ranges(prices):
             days_to_exp = calculate_days_to_expiry(longest_exp)
             forward_price = calculate_forward_price(spot_price, days_to_exp)
 
-            # Round forward to integer for strike center
-            mid = int(round(forward_price))
+            # Round forward to nearest strike step
+            step = strike_steps.get(symbol, 1.0)
+            mid = round(forward_price / step) * step
 
             # Build range: forward mid ± offset
-            strike_ranges[symbol] = np.arange(mid - offset, mid + offset + 1, 1)
+            strike_ranges[symbol] = np.arange(mid - offset, mid + offset + step, step)
             print(f"{symbol}: spot=${spot_price:.2f}, fwd=${forward_price:.2f} ({days_to_exp}d), range={mid-offset}-{mid+offset} ({len(strike_ranges[symbol])} strikes)")
         else:
             # Fallback if price fetch failed - should not happen
