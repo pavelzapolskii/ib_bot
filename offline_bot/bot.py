@@ -198,8 +198,8 @@ chat_id = TELEGRAM_CHAT_ID
 
 # ETF options: GLD (Gold), SLV (Silver), SPY (S&P 500)
 symbols = [
-    # 'GLD',
-    'SLV',
+    'GLD',
+    # 'SLV',
     # 'SPY',
 ]
 
@@ -1079,7 +1079,6 @@ _GLD/SLV/SPY ETF Options_
 /ivc - IV smile for Calls (select underlying & expiry)
 /ivp - IV smile for Puts (select underlying & expiry)
 /atm - Show ATM (50Δ) strikes for all tenors
-/calc - Calculate best trades (sell put vol / buy call insurance)
 
 ℹ️ *Info*
 /status - Bot status & contract count
@@ -1090,10 +1089,6 @@ _GLD/SLV/SPY ETF Options_
 • `/ivc` or `/ivp` - Current snapshot
 • `/ivc hour=1` - Last 1 hour average
 • `/ivc hour=4` - Last 4 hours average
-
-*Calc Options:*
-• Best Put to Sell Vol - highest IV/spread for OTM puts
-• Best Call Insurance - lowest IV/spread for ITM calls
 
 *Anomaly Signals:*
 🔥 ARBITRAGE - Bid IV > Ask IV at adjacent strike (strong)
@@ -1109,14 +1104,14 @@ _Only alerts when spread < 5%_
 """
             bot.send_message(message.chat.id, menu_text, parse_mode='Markdown')
 
-        @bot.message_handler(commands=['calc'])
-        def send_calc_menu(message):
-            """Show asset selection for calculations"""
-            markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton("🥇 GLD (Gold)", callback_data='CALC_ASSET_GLD'))
-            markup.add(types.InlineKeyboardButton("🥈 SLV (Silver)", callback_data='CALC_ASSET_SLV'))
-            markup.add(types.InlineKeyboardButton("📊 All Assets", callback_data='CALC_ASSET_ALL'))
-            bot.send_message(message.chat.id, "Select asset for calculation:", reply_markup=markup)
+        # @bot.message_handler(commands=['calc'])
+        # def send_calc_menu(message):
+        #     """Show asset selection for calculations"""
+        #     markup = types.InlineKeyboardMarkup()
+        #     markup.add(types.InlineKeyboardButton("🥇 GLD (Gold)", callback_data='CALC_ASSET_GLD'))
+        #     markup.add(types.InlineKeyboardButton("🥈 SLV (Silver)", callback_data='CALC_ASSET_SLV'))
+        #     markup.add(types.InlineKeyboardButton("📊 All Assets", callback_data='CALC_ASSET_ALL'))
+        #     bot.send_message(message.chat.id, "Select asset for calculation:", reply_markup=markup)
 
         @bot.message_handler(commands=['atm'])
         def send_atm_strikes(message):
@@ -1168,18 +1163,18 @@ _Only alerts when spread < 5%_
             bot.answer_callback_query(call.id)
             argument = call.data
 
-            # Handle CALC asset selection
-            if argument.startswith('CALC_ASSET_'):
-                asset = argument.split('_')[2]  # GLD, SLV, or ALL
-                markup = types.InlineKeyboardMarkup()
-                markup.add(types.InlineKeyboardButton("📉 Best Put to Sell Vol", callback_data=f'CALCTYPE_{asset}_SELLPUT'))
-                markup.add(types.InlineKeyboardButton("📈 Best Call Insurance", callback_data=f'CALCTYPE_{asset}_BUYCALL'))
-                asset_name = "All Assets" if asset == "ALL" else asset
-                bot.send_message(call.message.chat.id, f"Select calculation for *{asset_name}*:", reply_markup=markup, parse_mode='Markdown')
-                return
+            # # Handle CALC asset selection (disabled)
+            # if argument.startswith('CALC_ASSET_'):
+            #     asset = argument.split('_')[2]  # GLD, SLV, or ALL
+            #     markup = types.InlineKeyboardMarkup()
+            #     markup.add(types.InlineKeyboardButton("📉 Best Put to Sell Vol", callback_data=f'CALCTYPE_{asset}_SELLPUT'))
+            #     markup.add(types.InlineKeyboardButton("📈 Best Call Insurance", callback_data=f'CALCTYPE_{asset}_BUYCALL'))
+            #     asset_name = "All Assets" if asset == "ALL" else asset
+            #     bot.send_message(call.message.chat.id, f"Select calculation for *{asset_name}*:", reply_markup=markup, parse_mode='Markdown')
+            #     return
 
-            # Handle CALC type selection
-            if argument.startswith('CALCTYPE_'):
+            # # Handle CALC type selection (disabled)
+            if False and argument.startswith('CALCTYPE_'):
                 parts = argument.split('_')
                 asset_filter = parts[1]  # GLD, SLV, or ALL
                 calc_type = parts[2]  # SELLPUT or BUYCALL
