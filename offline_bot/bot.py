@@ -761,14 +761,25 @@ class IBApp(EWrapper, EClient):
             print("ERROR: Not connected to IB! Cannot fetch fresh IV.")
             return {s: {'bid_vol': None, 'ask_vol': None, 'bid_price': None, 'ask_price': None, 'underlying_price': None} for s in strikes}
 
-        # Use high request IDs to avoid collision with main subscriptions (0-999)
+        # Cancel any leftover subscriptions from previous fetch
         base_req_id = 10000
+        if hasattr(self, '_last_fresh_iv_count') and self._last_fresh_iv_count > 0:
+            print(f"Cancelling {self._last_fresh_iv_count} previous fresh IV subscriptions...")
+            for i in range(self._last_fresh_iv_count):
+                try:
+                    self.cancelMktData(base_req_id + i)
+                except:
+                    pass
+            time.sleep(1.0)  # Wait for cancellations to process
+
+        # Use high request IDs to avoid collision with main subscriptions (0-999)
         fresh_iv_data = {s: {'bid_vol': None, 'ask_vol': None, 'bid_price': None, 'ask_price': None, 'underlying_price': None} for s in strikes}
         self.fresh_iv_strikes = {}  # Map reqId -> strike
         self.fresh_iv_data = fresh_iv_data
         self.fresh_iv_received = 0
         self.fresh_iv_expected = len(strikes) * 2
         self.fresh_iv_done = threading.Event()
+        self._last_fresh_iv_count = len(strikes)  # Track for next cleanup
 
         # Request IV data for each strike
         for i, strike in enumerate(strikes):
