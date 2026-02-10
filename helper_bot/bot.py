@@ -210,6 +210,19 @@ expiration_dates = {
 strike_ranges = {}
 contracts = []
 
+# ============================================
+# SELL PUT SCANNER CONFIG
+# ============================================
+# Semi-liquid S&P 500 stocks for put selling
+SELLPUT_SYMBOLS = ['JPM', 'V', 'JNJ', 'PG', 'KO']
+
+# Tenor range: 0.5y to 1.5y (180-545 days)
+SELLPUT_MIN_DTE = 180
+SELLPUT_MAX_DTE = 545
+
+# ITM filter: Strike >= Spot * 1.10 (10% ITM)
+SELLPUT_ITM_THRESHOLD = 1.10
+
 
 class PriceFetcher(EWrapper, EClient):
     """Helper class to fetch current stock prices before building option contracts"""
@@ -276,6 +289,330 @@ def fetch_current_prices(host, port, client_id):
     time.sleep(1)
 
     return fetcher.prices
+
+
+# ============================================
+# SELL PUT SCANNER
+# ============================================
+class SellPutScanner(EWrapper, EClient):
+    """Scan for best deep ITM puts to sell"""
+    def __init__(self):
+        EClient.__init__(self, self)
+        self.connected_event = threading.Event()
+        self.prices = {}  # symbol -> price
+        self.option_chains = {}  # symbol -> list of expirations
+        self.option_data = []  # List of put option data
+        self.chain_event = threading.Event()
+        self.data_event = threading.Event()
+        self.reqId_to_symbol = {}
+        self.reqId_to_option = {}
+        self.expected_options = 0
+        self.received_options = 0
+
+    def error(self, reqId, errorCode, errorString, advancedOrderRejectJson=""):
+        if errorCode not in [2104, 2106, 2158]:
+            print(f"SellPutScanner Error {reqId} {errorCode}: {errorString}")
+        # Count errors as received to avoid hanging
+        if errorCode in [200, 10091, 101, 504, 354]:
+            if reqId in self.reqId_to_option:
+                self.received_options += 1
+                if self.received_options >= self.expected_options:
+                    self.data_event.set()
+
+    def nextValidId(self, orderId):
+        print(f"SellPutScanner connected, orderId={orderId}")
+        self.connected_event.set()
+
+    def tickPrice(self, reqId, tickType, price, attrib):
+        # tickType 4 = LAST price
+        if tickType == 4 and price > 0:
+            symbol = self.reqId_to_symbol.get(reqId)
+            if symbol:
+                self.prices[symbol] = price
+                print(f"  {symbol}: ${price:.2f}")
+
+    def securityDefinitionOptionParameter(self, reqId, exchange, underlyingConId,
+                                           tradingClass, multiplier, expirations, strikes):
+        """Receive option chain parameters"""
+        symbol = self.reqId_to_symbol.get(reqId)
+        if symbol and exchange == "SMART":
+            # Filter expirations to 0.5y - 1.5y range
+            valid_exps = []
+            for exp in expirations:
+                try:
+                    exp_date = datetime.datetime.strptime(exp, '%Y%m%d')
+                    dte = (exp_date - datetime.datetime.now()).days
+                    if SELLPUT_MIN_DTE <= dte <= SELLPUT_MAX_DTE:
+                        valid_exps.append(exp)
+                except:
+                    pass
+
+            if valid_exps:
+                self.option_chains[symbol] = {
+                    'expirations': sorted(valid_exps),
+                    'strikes': sorted(list(strikes)),
+                    'multiplier': multiplier,
+                    'tradingClass': tradingClass
+                }
+                print(f"  {symbol}: {len(valid_exps)} valid expirations, {len(strikes)} strikes")
+
+    def securityDefinitionOptionParameterEnd(self, reqId):
+        """Option chain request complete"""
+        self.chain_event.set()
+
+    def tickOptionComputation(self, reqId, field, tickAttrib, impliedVolatility,
+                               delta, optPrice, pvDividend, gamma, vega, theta, undPrice):
+        """Receive option greeks and IV"""
+        if reqId not in self.reqId_to_option:
+            return
+
+        opt_info = self.reqId_to_option[reqId]
+
+        # field 10 = BID, 11 = ASK, 12 = LAST
+        if field == 10:  # BID - this is what we care about for selling
+            if impliedVolatility and impliedVolatility > 0 and optPrice and optPrice > 0:
+                opt_info['bid_price'] = optPrice
+                opt_info['bid_iv'] = impliedVolatility
+                opt_info['delta'] = delta
+                opt_info['gamma'] = gamma
+                opt_info['theta'] = theta
+                opt_info['vega'] = vega
+                opt_info['undPrice'] = undPrice
+                self.received_options += 1
+
+                if self.received_options >= self.expected_options:
+                    self.data_event.set()
+
+
+def calculate_sellput_score(opt):
+    """
+    Calculate quality score for selling a put option.
+    Higher score = better candidate.
+
+    Factors:
+    - Time Value Annualized (higher = more premium)
+    - ITM Depth (deeper = safer)
+    - IV (higher = more premium)
+    - Delta (closer to -1 = safer)
+    - Theta (higher absolute = faster decay = good for seller)
+    """
+    try:
+        strike = opt['strike']
+        und_price = opt['undPrice']
+        bid_price = opt['bid_price']
+        bid_iv = opt['bid_iv']
+        delta = opt['delta']
+        theta = opt['theta']
+        dte = opt['dte']
+
+        if not all([strike, und_price, bid_price, bid_iv, delta, dte]):
+            return 0
+
+        # Intrinsic value for ITM put: max(0, strike - undPrice)
+        intrinsic = max(0, strike - und_price)
+
+        # Time value = bid price - intrinsic
+        time_value = bid_price - intrinsic
+        if time_value <= 0:
+            return 0
+
+        # Time Value Annualized (% of strike per year)
+        tv_annualized = (time_value / strike) * (365 / dte) * 100
+
+        # ITM Depth (% above current price)
+        itm_depth = (strike - und_price) / und_price * 100
+
+        # Delta safety: want delta close to -1 (safer)
+        # |delta| > 0.85 is good
+        delta_safety = abs(delta) if delta else 0
+
+        # Theta benefit: higher |theta| = faster decay = good for seller
+        # Normalize theta (typically -0.01 to -0.10 for deep ITM)
+        theta_benefit = abs(theta) * 100 if theta else 0
+
+        # IV component (higher = more premium)
+        iv_component = bid_iv * 100
+
+        # Composite score
+        # Weight: TV_ann (40%), ITM_depth (20%), Delta (15%), Theta (15%), IV (10%)
+        score = (
+            tv_annualized * 0.40 +
+            itm_depth * 0.20 +
+            delta_safety * 100 * 0.15 +
+            theta_benefit * 0.15 +
+            iv_component * 0.10
+        )
+
+        return score
+    except Exception as e:
+        print(f"Score calc error: {e}")
+        return 0
+
+
+def scan_sellput_opportunities(host, port, client_id, progress_callback=None):
+    """
+    Scan for best deep ITM puts to sell.
+    Returns list of opportunities sorted by score.
+    """
+    scanner = SellPutScanner()
+    scanner.connect(host, port, clientId=client_id)
+
+    api_thread = threading.Thread(target=scanner.run, daemon=True)
+    api_thread.start()
+
+    if not scanner.connected_event.wait(timeout=15):
+        print("ERROR: SellPutScanner connection timeout!")
+        scanner.disconnect()
+        return []
+
+    print("SellPutScanner connected!")
+    time.sleep(0.5)
+
+    # Step 1: Get current stock prices
+    if progress_callback:
+        progress_callback("📊 Fetching stock prices...")
+    print("Fetching stock prices...")
+
+    for i, symbol in enumerate(SELLPUT_SYMBOLS):
+        scanner.reqId_to_symbol[i] = symbol
+        contract = Contract()
+        contract.symbol = symbol
+        contract.secType = "STK"
+        contract.exchange = "SMART"
+        contract.currency = "USD"
+        scanner.reqMktData(i, contract, "", True, False, [])  # Snapshot mode
+        time.sleep(0.2)
+
+    time.sleep(3)  # Wait for prices
+
+    if not scanner.prices:
+        print("ERROR: No stock prices received!")
+        scanner.disconnect()
+        return []
+
+    # Step 2: Get option chains
+    if progress_callback:
+        progress_callback("📋 Fetching option chains...")
+    print("Fetching option chains...")
+
+    for i, symbol in enumerate(SELLPUT_SYMBOLS):
+        if symbol not in scanner.prices:
+            continue
+
+        req_id = 100 + i
+        scanner.reqId_to_symbol[req_id] = symbol
+
+        contract = Contract()
+        contract.symbol = symbol
+        contract.secType = "STK"
+        contract.exchange = "SMART"
+        contract.currency = "USD"
+
+        scanner.reqSecDefOptParams(req_id, symbol, "", "STK", contract.conId if hasattr(contract, 'conId') else 0)
+        time.sleep(0.3)
+
+    # Wait for chains
+    scanner.chain_event.wait(timeout=15)
+    time.sleep(1)
+
+    if not scanner.option_chains:
+        print("ERROR: No option chains received!")
+        scanner.disconnect()
+        return []
+
+    # Step 3: Request option data for deep ITM puts
+    if progress_callback:
+        progress_callback("💰 Scanning deep ITM puts...")
+    print("Scanning deep ITM puts...")
+
+    req_id = 1000
+    options_to_request = []
+
+    for symbol, chain in scanner.option_chains.items():
+        spot = scanner.prices.get(symbol, 0)
+        if spot <= 0:
+            continue
+
+        itm_threshold = spot * SELLPUT_ITM_THRESHOLD
+
+        # Get strikes that are >= 10% ITM
+        itm_strikes = [s for s in chain['strikes'] if s >= itm_threshold]
+
+        # Limit to top 5 strikes per symbol to avoid rate limits
+        itm_strikes = sorted(itm_strikes)[:5]
+
+        for exp in chain['expirations'][:3]:  # Limit to 3 expirations per symbol
+            for strike in itm_strikes:
+                options_to_request.append({
+                    'symbol': symbol,
+                    'expiration': exp,
+                    'strike': strike,
+                    'spot': spot,
+                    'req_id': req_id
+                })
+                req_id += 1
+
+    print(f"Requesting data for {len(options_to_request)} options...")
+    scanner.expected_options = len(options_to_request)
+
+    # Request option market data
+    for opt in options_to_request:
+        contract = Contract()
+        contract.symbol = opt['symbol']
+        contract.secType = "OPT"
+        contract.exchange = "SMART"
+        contract.currency = "USD"
+        contract.lastTradeDateOrContractMonth = opt['expiration']
+        contract.strike = float(opt['strike'])
+        contract.right = "P"  # Puts only
+        contract.multiplier = "100"
+
+        exp_date = datetime.datetime.strptime(opt['expiration'], '%Y%m%d')
+        dte = (exp_date - datetime.datetime.now()).days
+
+        scanner.reqId_to_option[opt['req_id']] = {
+            'symbol': opt['symbol'],
+            'strike': opt['strike'],
+            'expiration': opt['expiration'],
+            'dte': dte,
+            'spot': opt['spot'],
+            'bid_price': None,
+            'bid_iv': None,
+            'delta': None,
+            'gamma': None,
+            'theta': None,
+            'vega': None,
+            'undPrice': None
+        }
+
+        scanner.reqMktData(opt['req_id'], contract, "232", True, False, [])  # Snapshot with greeks
+        time.sleep(0.15)  # Rate limiting
+
+        if (opt['req_id'] - 1000 + 1) % 20 == 0:
+            print(f"  Requested {opt['req_id'] - 1000 + 1}/{len(options_to_request)}...")
+            time.sleep(1)
+
+    # Wait for data
+    if progress_callback:
+        progress_callback("⏳ Processing data...")
+    scanner.data_event.wait(timeout=60)
+    time.sleep(1)
+
+    # Step 4: Calculate scores and rank
+    results = []
+    for req_id, opt in scanner.reqId_to_option.items():
+        if opt['bid_price'] and opt['bid_iv']:
+            score = calculate_sellput_score(opt)
+            opt['score'] = score
+            results.append(opt)
+
+    # Sort by score (highest first)
+    results.sort(key=lambda x: x.get('score', 0), reverse=True)
+
+    scanner.disconnect()
+    time.sleep(0.5)
+
+    return results
 
 
 class IVSmileFetcher(EWrapper, EClient):
@@ -970,31 +1307,31 @@ Ticks received: {app.tick_count if hasattr(app, 'tick_count') else 'N/A'}"""
         def send_menu(message):
             """Show all available commands"""
             menu_text = """📋 *IB Options Monitor Bot*
-    _GLD/SLV/SPY ETF Options_
+    _Options Helper Bot_
 
     *Commands:*
 
-    📊 *Market Data*
-    /ivc - IV smile for Calls (select underlying & expiry)
-    /ivp - IV smile for Puts (select underlying & expiry)
-    /atm - Show ATM (50Δ) strikes for all tenors
+    📊 *ETF IV Data*
+    /ivc - IV smile for Calls
+    /ivp - IV smile for Puts
+    /atm - Show ATM (50Δ) strikes
     /calc - Calculate best trades
 
+    💰 *Stock Put Scanner*
+    /sellput - Find best deep ITM puts to sell
+    _(JPM, V, JNJ, PG, KO | 0.5-1.5y tenor | ≥10% ITM)_
+
     ℹ️ *Info*
-    /status - Bot status & contract count
+    /status - Bot status
     /market - Check if market is open
     /menu - Show this menu
 
-    *Calc Options:*
-    • Best Put to Sell Vol - highest IV/spread for OTM puts
-    • Best Call Insurance - lowest IV/spread for ITM calls
-
-    *Monitored Underlyings:*
-    • GLD (Gold ETF) - ±100 strikes
-    • SLV (Silver ETF) - ±25 strikes ($0.50 steps)
-    • SPY (S&P 500 ETF) - ±50 strikes
-
-    *Expirations:* Feb 20, Mar 20, Apr 17
+    *Sell Put Score:*
+    • Time Value (ann) × 40%
+    • ITM Depth × 20%
+    • Delta safety × 15%
+    • Theta (decay) × 15%
+    • IV × 10%
     """
             bot.send_message(message.chat.id, menu_text, parse_mode='Markdown')
 
@@ -1006,6 +1343,91 @@ Ticks received: {app.tick_count if hasattr(app, 'tick_count') else 'N/A'}"""
             markup.add(types.InlineKeyboardButton("🥈 SLV (Silver)", callback_data='CALC_ASSET_SLV'))
             markup.add(types.InlineKeyboardButton("📊 All Assets", callback_data='CALC_ASSET_ALL'))
             bot.send_message(message.chat.id, "Select asset for calculation:", reply_markup=markup)
+
+        @bot.message_handler(commands=['sellput'])
+        def send_sellput_scan(message):
+            """Scan for best deep ITM puts to sell"""
+            # Check market status first
+            market = get_market_status()
+            if not market['is_open']:
+                bot.send_message(message.chat.id,
+                    f"⚠️ Market is closed ({market['status']})\n"
+                    "Scan works best during market hours for accurate pricing.",
+                    parse_mode='Markdown')
+
+            status_msg = bot.send_message(message.chat.id,
+                f"🔍 *Scanning best puts to sell...*\n"
+                f"Symbols: {', '.join(SELLPUT_SYMBOLS)}\n"
+                f"Tenor: {SELLPUT_MIN_DTE}-{SELLPUT_MAX_DTE} days\n"
+                f"ITM: ≥{int((SELLPUT_ITM_THRESHOLD-1)*100)}%\n\n"
+                f"⏳ This may take 30-60 seconds...",
+                parse_mode='Markdown')
+
+            def update_status(text):
+                try:
+                    bot.edit_message_text(
+                        f"🔍 *Scanning best puts to sell...*\n{text}",
+                        message.chat.id, status_msg.message_id,
+                        parse_mode='Markdown')
+                except:
+                    pass
+
+            try:
+                results = scan_sellput_opportunities(
+                    IB_HOST, IB_PORT, IB_CLIENT_ID + 200,
+                    progress_callback=update_status
+                )
+
+                if not results:
+                    bot.send_message(message.chat.id,
+                        "❌ No valid put options found.\n"
+                        "Check IB connection and market status.")
+                    return
+
+                # Build response message with top 10
+                msg = "📈 *Best Deep ITM Puts to Sell*\n"
+                msg += f"_Sorted by composite score_\n"
+                msg += f"_ITM ≥{int((SELLPUT_ITM_THRESHOLD-1)*100)}%, DTE {SELLPUT_MIN_DTE}-{SELLPUT_MAX_DTE}d_\n\n"
+
+                for i, opt in enumerate(results[:10]):
+                    symbol = opt['symbol']
+                    strike = opt['strike']
+                    exp = opt['expiration']
+                    dte = opt['dte']
+                    bid = opt['bid_price']
+                    iv = opt['bid_iv'] * 100 if opt['bid_iv'] else 0
+                    delta = opt['delta'] if opt['delta'] else 0
+                    theta = opt['theta'] if opt['theta'] else 0
+                    spot = opt['spot']
+                    score = opt.get('score', 0)
+
+                    # Calculate ITM depth
+                    itm_pct = (strike - spot) / spot * 100
+
+                    # Calculate time value
+                    intrinsic = max(0, strike - spot)
+                    time_value = bid - intrinsic if bid else 0
+                    tv_ann = (time_value / strike) * (365 / dte) * 100 if dte > 0 else 0
+
+                    # Format expiration
+                    exp_date = datetime.datetime.strptime(exp, '%Y%m%d')
+                    exp_str = exp_date.strftime('%b %d')
+
+                    msg += f"*{i+1}. {symbol} ${strike}P {exp_str}*\n"
+                    msg += f"   Spot: ${spot:.2f} | ITM: +{itm_pct:.1f}%\n"
+                    msg += f"   Bid: ${bid:.2f} | IV: {iv:.1f}%\n"
+                    msg += f"   TV(ann): {tv_ann:.1f}% | DTE: {dte}d\n"
+                    msg += f"   Δ: {delta:.2f} | θ: {theta:.3f}\n"
+                    msg += f"   📊 Score: {score:.1f}\n\n"
+
+                msg += "_Higher score = better candidate_\n"
+                msg += "_Score = TV×0.4 + ITM×0.2 + Δ×0.15 + θ×0.15 + IV×0.1_"
+
+                bot.send_message(message.chat.id, msg, parse_mode='Markdown')
+
+            except Exception as e:
+                print(f"SellPut scan error: {e}")
+                bot.send_message(message.chat.id, f"❌ Scan error: {str(e)}")
 
         @bot.message_handler(commands=['atm'])
         def send_atm_strikes(message):
