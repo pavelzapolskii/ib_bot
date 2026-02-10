@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  # IB Gateway with virtual display (for headless server)
+  ib-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    restart: unless-stopped
+    environment:
+      TWS_USERID: ${IB_USERNAME}
+      TWS_PASSWORD: ${IB_PASSWORD}
+      TRADING_MODE: ${IB_TRADING_MODE:-live}  # Using live for market data
+      TWS_ACCEPT_INCOMING: "yes"
+      READ_ONLY_API: "yes"  # READ ONLY - no trading allowed!
+      VNC_SERVER_PASSWORD: ${VNC_PASSWORD:-password}
+      # Trust all Docker network IPs for API connections
+      TWOFA_TIMEOUT_ACTION: restart
+      AUTO_RESTART_TIME: ""
+      RELOGIN_AFTER_2FA_TIMEOUT: "yes"
+      # Allow API connections from any IP (Docker network uses 172.x.x.x)
+      IBC_TrustedIPs: "172.0.0.0-172.255.255.255"
+    ports:
+      - "4001:4001"   # IB Gateway API (live) - internal
+      - "4002:4002"   # IB Gateway API (paper) - internal
+      - "4003:4003"   # IB Gateway API (live) - socat relay for external connections
+      - "5900:5900"   # VNC for manual login/2FA
+    volumes:
+      - ib-gateway-data:/root/Jts
+    networks:
+      - ib-network
+
+  # IB Options Bot (Telegram alerts only, no database)
+  ib-bot:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - ib-gateway
+    command: sh -c "echo 'Waiting 60s for IB Gateway to start...' && sleep 60 && python bot.py"
+    environment:
+      # Telegram
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      # IB Gateway (connect via socat relay port for external connections)
+      IB_HOST: ib-gateway
+      IB_PORT: 4003  # Live trading port (socat relay) - READ ONLY MODE
+      IB_CLIENT_ID: ${IB_CLIENT_ID:-22}
+    networks:
+      - ib-network
+
+volumes:
+  ib-gateway-data:
+
+networks:
+  ib-network:
+    driver: bridge
